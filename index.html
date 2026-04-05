@@ -612,7 +612,7 @@ async function handleLogin() {
     if (error) throw error;
     await loadUserAndInit(data.user);
   } catch (err) {
-    showLoginError(err.message || 'Login failed. Try demo login.');
+    showLoginError(err.message || 'Login failed. Please check your credentials.');
     btn.textContent = 'Sign In';
   }
 }
@@ -709,13 +709,8 @@ const MOCK_JOBS = [
   { id: 'job-6', customer_name: 'Deepa Krishnan', phone: '9345678901', alt_phone: '', place: 'Kesavadasapuram', address: '88 East Fort, Kesavadasapuram, TVM', location_link: 'https://maps.google.com/?q=Kesavadasapuram', service_id: 'svc-1', slot_id: 'sl-3', work_spec: 'AC Installation', work_details: 'New 2 ton split AC installation. All material provided by customer.', amount: 2500, advance: 2500, status: 'booked', created_by: 'u6', created_at: new Date().toISOString() },
 ];
 
-window.mockState = {
-  jobs: [...MOCK_JOBS],
-  slots: [...MOCK_SLOTS],
-  users: [...MOCK_USERS],
-  services: [...MOCK_SERVICES],
-  updates: []
-};
+// Live state — loaded from Supabase on login
+window.mockState = { jobs: [], slots: [], users: [], services: [...MOCK_SERVICES], updates: [] };
 
 function formatTime(t) {
   if (!t) return '—';
@@ -723,30 +718,80 @@ function formatTime(t) {
   const hr = parseInt(h);
   return `${hr > 12 ? hr - 12 : hr || 12}:${m} ${hr >= 12 ? 'PM' : 'AM'}`;
 }
-function getService(id) { return MOCK_SERVICES.find(s => s.id === id) || { name: '—', icon: '?', color: '#888' }; }
-function getUser(id) { return MOCK_USERS.find(u => u.id === id); }
+function getService(id) { return window.mockState.services.find(s => s.id === id) || MOCK_SERVICES.find(s => s.id === id) || { name: '—', icon: '?', color: '#888' }; }
+function getUser(id) { return window.mockState.users.find(u => u.id === id); }
 function getSlot(id) { return window.mockState.slots.find(s => s.id === id); }
 function getTechnicians() { return window.mockState.users.filter(u => u.role === 'technician'); }
 
-function addJob(job) {
-  const newJob = { ...job, id: 'job-' + Date.now(), created_at: new Date().toISOString(), status: 'booked' };
-  window.mockState.jobs.unshift(newJob);
+// ---- LOAD ALL DATA FROM SUPABASE ----
+async function loadAppData() {
+  try {
+    const [jobsRes, slotsRes, usersRes, servicesRes] = await Promise.all([
+      supabase.from('jobs').select('*').order('created_at', { ascending: false }),
+      supabase.from('slots').select('*').order('time', { ascending: true }),
+      supabase.from('users').select('*'),
+      supabase.from('services').select('*')
+    ]);
+    if (jobsRes.data) window.mockState.jobs = jobsRes.data;
+    if (slotsRes.data) window.mockState.slots = slotsRes.data;
+    if (usersRes.data) window.mockState.users = usersRes.data;
+    if (servicesRes.data && servicesRes.data.length) window.mockState.services = servicesRes.data;
+  } catch(e) { console.error('Data load error:', e); showToast('Failed to load data from server', 'error'); }
+}
+
+// ---- WRITE FUNCTIONS (Supabase) ----
+async function addJob(job) {
+  const newJob = { ...job, created_at: new Date().toISOString(), status: 'booked' };
+  const { data, error } = await supabase.from('jobs').insert(newJob).select().single();
+  if (error) { showToast('Failed to save job: ' + error.message, 'error'); return null; }
+  window.mockState.jobs.unshift(data);
   const slot = window.mockState.slots.find(s => s.id === job.slot_id);
-  if (slot) slot.status = 'booked';
-  return newJob;
+  if (slot) { slot.status = 'booked'; await supabase.from('slots').update({ status: 'booked' }).eq('id', job.slot_id); }
+  return data;
 }
 
-function assignTech(slotId, techId) {
+async function assignTech(slotId, techId) {
+  await supabase.from('slots').update({ technician_id: techId, status: 'booked' }).eq('id', slotId);
   const slot = window.mockState.slots.find(s => s.id === slotId);
-  if (slot) { slot.technician_id = techId; slot.status = slot.status === 'available' ? 'booked' : slot.status; }
-  const jobs = window.mockState.jobs.filter(j => j.slot_id === slotId);
-  jobs.forEach(j => { if (j.status === 'booked') j.status = 'assigned'; });
+  if (slot) { slot.technician_id = techId; slot.status = 'booked'; }
+  const jobs = window.mockState.jobs.filter(j => j.slot_id === slotId && j.status === 'booked');
+  for (const j of jobs) {
+    await supabase.from('jobs').update({ status: 'assigned' }).eq('id', j.id);
+    j.status = 'assigned';
+  }
 }
 
-function completeJob(jobId, updateData) {
+async function completeJob(jobId, updateData) {
+  await supabase.from('jobs').update({ status: 'completed' }).eq('id', jobId);
   const job = window.mockState.jobs.find(j => j.id === jobId);
   if (job) job.status = 'completed';
-  window.mockState.updates.push({ id: 'upd-' + Date.now(), job_id: jobId, tech_id: window.currentUser?.id || 'u3', ...updateData, updated_at: new Date().toISOString() });
+  await supabase.from('job_updates').insert({ job_id: jobId, tech_id: window.currentUser?.id, ...updateData, updated_at: new Date().toISOString() }).catch(() => {});
+}
+
+async function blockSlotDB(slotId) {
+  await supabase.from('slots').update({ status: 'blocked' }).eq('id', slotId);
+  const slot = window.mockState.slots.find(s => s.id === slotId);
+  if (slot) slot.status = 'blocked';
+}
+
+async function unblockSlotDB(slotId) {
+  await supabase.from('slots').update({ status: 'available' }).eq('id', slotId);
+  const slot = window.mockState.slots.find(s => s.id === slotId);
+  if (slot) slot.status = 'available';
+}
+
+async function createSlotDB(slotData) {
+  const { data, error } = await supabase.from('slots').insert(slotData).select().single();
+  if (error) { showToast('Failed to create slot: ' + error.message, 'error'); return null; }
+  window.mockState.slots.push(data);
+  return data;
+}
+
+async function addUserDB(userData) {
+  const { data, error } = await supabase.from('users').insert(userData).select().single();
+  if (error) { showToast('Failed to add user: ' + error.message, 'error'); return null; }
+  window.mockState.users.push(data);
+  return data;
 }
 
 // ============================================================
@@ -754,7 +799,7 @@ function completeJob(jobId, updateData) {
 // ============================================================
 let sidebarCollapsed = false;
 
-function initApp(user) {
+async function initApp(user) {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('sidebar-name').textContent = user.name || user.email;
@@ -765,6 +810,8 @@ function initApp(user) {
   roleBadgeS.textContent = user.role; roleBadgeS.className = 'role-badge ' + user.role;
   roleBadgeN.textContent = user.role; roleBadgeN.className = 'role-badge ' + user.role;
   filterNavForRole(user.role);
+  document.getElementById('main-content').innerHTML = '<div class="loading-state"><div class="loading-spinner"></div> Loading data...</div>';
+  await loadAppData();
   navigate('dashboard');
 }
 
@@ -777,32 +824,31 @@ function filterNavForRole(role) {
   });
 }
 
-function navigate(page) {
+async function navigate(page) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
   const titles = { dashboard: 'Dashboard', jobs: 'Jobs', slots: 'Slots', users: 'Users' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const role = window.currentUser?.role || 'sales';
   const content = document.getElementById('main-content');
   content.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div> Loading...</div>';
-  setTimeout(() => {
-    try {
-      if (page === 'dashboard') {
-        if (role === 'sales') content.innerHTML = renderSalesDashboard();
-        else if (role === 'scheduler') content.innerHTML = renderSchedulerDashboard();
-        else content.innerHTML = renderTechnicianDashboard();
-      } else if (page === 'jobs') {
-        if (role === 'technician') content.innerHTML = renderTechnicianDashboard();
-        else content.innerHTML = renderJobsPage();
-      } else if (page === 'slots') {
-        content.innerHTML = renderSlotsPage();
-      } else if (page === 'users') {
-        content.innerHTML = renderUsersPage();
-      }
-    } catch (e) {
-      content.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><p class="empty-state-text">Page error</p><p class="empty-state-sub">${e.message}</p></div>`;
-    }
-  }, 150);
   document.getElementById('sidebar').classList.remove('mobile-open');
+  await loadAppData();
+  try {
+    if (page === 'dashboard') {
+      if (role === 'sales') content.innerHTML = renderSalesDashboard();
+      else if (role === 'scheduler') content.innerHTML = renderSchedulerDashboard();
+      else content.innerHTML = renderTechnicianDashboard();
+    } else if (page === 'jobs') {
+      if (role === 'technician') content.innerHTML = renderTechnicianDashboard();
+      else content.innerHTML = renderJobsPage();
+    } else if (page === 'slots') {
+      content.innerHTML = renderSlotsPage();
+    } else if (page === 'users') {
+      content.innerHTML = renderUsersPage();
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><p class="empty-state-text">Page error</p><p class="empty-state-sub">${e.message}</p></div>`;
+  }
 }
 
 function toggleSidebar() {
@@ -860,10 +906,10 @@ function openJobDetail(jobId) {
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('job-detail-modal'); });
 }
 
-function doAssignFromModal(slotId) {
+async function doAssignFromModal(slotId) {
   const techId = document.getElementById('modal-tech-select')?.value;
   if (!techId) { showToast('Select a technician first', 'error'); return; }
-  assignTech(slotId, techId);
+  await assignTech(slotId, techId);
   closeModal('job-detail-modal');
   showToast('Technician assigned successfully!', 'success');
   navigate(document.querySelector('.nav-item.active')?.dataset.page || 'dashboard');
@@ -949,17 +995,18 @@ function loadAvailableSlots() {
     : '<option value="">No slots available</option>';
 }
 
-function bookJob() {
+async function bookJob() {
   const name = document.getElementById('f-name')?.value?.trim();
   const phone = document.getElementById('f-phone')?.value?.trim();
   const place = document.getElementById('f-place')?.value?.trim();
   const serviceId = document.getElementById('f-service')?.value;
   const slotId = document.getElementById('f-slot')?.value;
   if (!name || !phone || !place || !serviceId || !slotId) { showToast('Please fill all required fields (*)', 'error'); return; }
-  addJob({ customer_name: name, phone, alt_phone: document.getElementById('f-altphone')?.value||'', place, address: document.getElementById('f-address')?.value||'', location_link: document.getElementById('f-location')?.value||'', service_id: serviceId, slot_id: slotId, work_spec: document.getElementById('f-workspec')?.value||'', work_details: document.getElementById('f-workdetails')?.value||'', amount: parseFloat(document.getElementById('f-amount')?.value)||0, advance: parseFloat(document.getElementById('f-advance')?.value)||0, created_by: window.currentUser?.id||'u1' });
-  showToast(`Job booked for ${name}!`, 'success');
-  resetForm();
-  navigate('dashboard');
+  const btn = document.querySelector('[onclick="bookJob()"]');
+  if (btn) btn.textContent = 'Saving...';
+  const result = await addJob({ customer_name: name, phone, alt_phone: document.getElementById('f-altphone')?.value||'', place, address: document.getElementById('f-address')?.value||'', location_link: document.getElementById('f-location')?.value||'', service_id: serviceId, slot_id: slotId, work_spec: document.getElementById('f-workspec')?.value||'', work_details: document.getElementById('f-workdetails')?.value||'', amount: parseFloat(document.getElementById('f-amount')?.value)||0, advance: parseFloat(document.getElementById('f-advance')?.value)||0, created_by: window.currentUser?.id });
+  if (result) { showToast(`Job booked for ${name}!`, 'success'); resetForm(); navigate('dashboard'); }
+  else if (btn) btn.textContent = '✓ Book Job';
 }
 
 function resetForm() {
@@ -1079,10 +1126,10 @@ function showJobDetailPanel(jobId) {
     ${job.status !== 'completed' ? `<div class="form-group" style="margin-bottom:12px"><label>Assign Technician</label><select id="panel-tech-select"><option value="">Select...</option>${techs.map(t=>`<option value="${t.id}" ${tech?.id===t.id?'selected':''}>${t.name}</option>`).join('')}</select></div><button class="btn btn-primary btn-full" onclick="doAssignFromPanel('${job.slot_id}','${job.id}')">✓ Assign Technician</button>` : `<div class="status status-completed" style="width:fit-content">Job Completed</div>`}`;
 }
 
-function doAssignFromPanel(slotId, jobId) {
+async function doAssignFromPanel(slotId, jobId) {
   const techId = document.getElementById('panel-tech-select')?.value;
   if (!techId) { showToast('Select a technician', 'error'); return; }
-  assignTech(slotId, techId);
+  await assignTech(slotId, techId);
   showToast('Technician assigned!', 'success');
   showJobDetailPanel(jobId);
   const wrap = document.getElementById('sched-jobs-wrap');
@@ -1107,14 +1154,14 @@ function openAssignModal(slotId) {
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('assign-modal'); });
 }
 
-function confirmAssign(slotId) {
+async function confirmAssign(slotId) {
   const techId = document.getElementById('assign-tech-select')?.value;
   if (!techId) { showToast('Select a technician', 'error'); return; }
-  assignTech(slotId, techId); closeModal('assign-modal'); showToast('Technician assigned!', 'success'); navigate('dashboard');
+  await assignTech(slotId, techId); closeModal('assign-modal'); showToast('Technician assigned!', 'success'); navigate('dashboard');
 }
 
-function blockSlot(slotId) { const slot = window.mockState.slots.find(s=>s.id===slotId); if (slot) slot.status = 'blocked'; showToast('Slot blocked', 'info'); navigate('dashboard'); }
-function unblockSlot(slotId) { const slot = window.mockState.slots.find(s=>s.id===slotId); if (slot) slot.status = 'available'; showToast('Slot unblocked', 'success'); navigate('dashboard'); }
+async function blockSlot(slotId) { await blockSlotDB(slotId); showToast('Slot blocked', 'info'); navigate('dashboard'); }
+async function unblockSlot(slotId) { await unblockSlotDB(slotId); showToast('Slot unblocked', 'success'); navigate('dashboard'); }
 
 function openCreateSlotModal() {
   const services = window.mockState.services;
@@ -1126,12 +1173,12 @@ function openCreateSlotModal() {
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('create-slot-modal'); });
 }
 
-function createSlot() {
+async function createSlot() {
   const serviceId = document.getElementById('cs-service')?.value, date = document.getElementById('cs-date')?.value, time = document.getElementById('cs-time')?.value;
   if (!serviceId || !date || !time) { showToast('Fill all fields', 'error'); return; }
   if (window.mockState.slots.find(s => s.service_id===serviceId && s.date===date && s.time===time)) { showToast('Slot already exists!', 'error'); return; }
-  window.mockState.slots.push({ id: 'sl-'+Date.now(), service_id: serviceId, date, time, status: 'available', technician_id: null });
-  closeModal('create-slot-modal'); showToast('Slot created!', 'success'); navigate('dashboard');
+  const result = await createSlotDB({ service_id: serviceId, date, time, status: 'available', technician_id: null });
+  if (result) { closeModal('create-slot-modal'); showToast('Slot created!', 'success'); navigate('dashboard'); }
 }
 
 function renderSlotsPage() { return renderSchedulerDashboard(); }
@@ -1223,11 +1270,11 @@ function refreshTechCard(jobId) {
   if (cardEl) { const div = document.createElement('div'); div.innerHTML = renderTechJobCard(job); cardEl.replaceWith(div.firstElementChild); }
 }
 
-function submitWork(jobId) {
+async function submitWork(jobId) {
   const workDone = document.getElementById(`wd-${jobId}`)?.value?.trim();
   if (!workDone) { showToast('Please describe the work done', 'error'); return; }
   const state = window.techWorkState[jobId] || {};
-  completeJob(jobId, { site_in: state.startTimeVal, site_out: state.endTimeVal, final_amount: parseFloat(document.getElementById(`wa-${jobId}`)?.value)||0, payment_mode: document.getElementById(`wp-${jobId}`)?.value, work_done: workDone, issues: document.getElementById(`wi-${jobId}`)?.value?.trim()||'None' });
+  await completeJob(jobId, { site_in: state.startTimeVal, site_out: state.endTimeVal, final_amount: parseFloat(document.getElementById(`wa-${jobId}`)?.value)||0, payment_mode: document.getElementById(`wp-${jobId}`)?.value, work_done: workDone, issues: document.getElementById(`wi-${jobId}`)?.value?.trim()||'None' });
   delete window.techWorkState[jobId];
   showToast('Work report submitted! Job marked complete.', 'success');
   setTimeout(() => navigate('dashboard'), 500);
@@ -1263,11 +1310,11 @@ function openAddUserModal() {
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('add-user-modal'); });
 }
 
-function addUser() {
+async function addUser() {
   const name = document.getElementById('nu-name')?.value?.trim(), email = document.getElementById('nu-email')?.value?.trim(), phone = document.getElementById('nu-phone')?.value?.trim(), role = document.getElementById('nu-role')?.value;
   if (!name || !email) { showToast('Name and email required', 'error'); return; }
-  window.mockState.users.push({ id: 'u'+Date.now(), name, email, phone: phone||'—', role });
-  closeModal('add-user-modal'); showToast(`${name} added as ${role}!`, 'success'); navigate('users');
+  const result = await addUserDB({ name, email, phone: phone||'—', role });
+  if (result) { closeModal('add-user-modal'); showToast(`${name} added as ${role}!`, 'success'); navigate('users'); }
 }
 
 // ============================================================
