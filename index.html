@@ -521,7 +521,7 @@ tbody tr:hover { background: var(--bg-hover); }
         <input type="password" id="login-password" placeholder="••••••••" />
       </div>
       <div id="login-error" class="login-error hidden"></div>
-      <button class="btn btn-primary btn-full" onclick="handleLogin()">
+      <button class="btn btn-primary btn-full" onclick="debugLogin()">
         <span id="login-btn-text">Sign In</span>
       </button>
     </div>
@@ -593,24 +593,26 @@ tbody tr:hover { background: var(--bg-hover); }
 
 <script>
 // ============================================================
+// DEBUG LOGIN
+function debugLogin() {
+  var errEl = document.getElementById("login-error");
+  errEl.classList.remove("hidden");
+  errEl.textContent = "⏳ Button clicked...";
+  try {
+    if (!window.supabase) { errEl.textContent = "❌ Supabase library not loaded. No internet?"; return; }
+    errEl.textContent = "✅ Supabase loaded. Signing in...";
+    handleLogin();
+  } catch(e) {
+    errEl.textContent = "❌ JS Error: " + e.message;
+  }
+}
+
 // SUPABASE CLIENT
 // ============================================================
 const SUPABASE_URL = 'https://egdseuuzjpqwpeclpujj.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnZHNldXV6anBxd3BlY2xwdWpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzODQxNDUsImV4cCI6MjA5MDk2MDE0NX0.n1oZDVPtN68ExgrWMi8bzgleXlz4aIXsqPPQG6BGeDE';
 
-let _supabase = null;
-function getSupabase() {
-  if (_supabase) return _supabase;
-  if (!window.supabase || typeof window.supabase.createClient !== 'function') {
-    throw new Error('Supabase library not loaded yet. Please wait a moment and try again.');
-  }
-  _supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-  return _supabase;
-}
-// Alias so existing code using `supabase.from(...)` still works
-const supabase = new Proxy({}, {
-  get(_, prop) { return getSupabase()[prop]; }
-});
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 async function handleLogin() {
   const email = document.getElementById('login-email').value.trim();
@@ -621,7 +623,7 @@ async function handleLogin() {
   btn.textContent = 'Signing in...';
   errEl.classList.add('hidden');
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
     await loadUserAndInit(data.user);
   } catch (err) {
@@ -650,7 +652,7 @@ async function quickLogin(role) {
 
 async function loadUserAndInit(authUser) {
   try {
-    const { data: profile } = await supabase.from('users').select('*').eq('id', authUser.id).single();
+    const { data: profile } = await sb.from('users').select('*').eq('id', authUser.id).single();
     const user = { id: authUser.id, email: authUser.email, name: profile?.name || authUser.email, role: profile?.role || 'sales' };
     window.currentUser = user;
     initApp(user);
@@ -658,7 +660,7 @@ async function loadUserAndInit(authUser) {
 }
 
 async function handleLogout() {
-  await supabase.auth.signOut().catch(() => {});
+  await sb.auth.signOut().catch(() => {});
   window.currentUser = null;
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
@@ -668,7 +670,7 @@ async function handleLogout() {
 
 async function checkSession() {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session } } = await sb.auth.getSession();
     if (session?.user) await loadUserAndInit(session.user);
   } catch (e) {}
 }
@@ -740,10 +742,10 @@ function getTechnicians() { return window.mockState.users.filter(u => u.role ===
 async function loadAppData() {
   try {
     const [jobsRes, slotsRes, usersRes, servicesRes] = await Promise.all([
-      supabase.from('jobs').select('*').order('created_at', { ascending: false }),
-      supabase.from('slots').select('*').order('time', { ascending: true }),
-      supabase.from('users').select('*'),
-      supabase.from('services').select('*')
+      sb.from('jobs').select('*').order('created_at', { ascending: false }),
+      sb.from('slots').select('*').order('time', { ascending: true }),
+      sb.from('users').select('*'),
+      sb.from('services').select('*')
     ]);
     if (jobsRes.data) window.mockState.jobs = jobsRes.data;
     if (slotsRes.data) window.mockState.slots = slotsRes.data;
@@ -755,53 +757,53 @@ async function loadAppData() {
 // ---- WRITE FUNCTIONS (Supabase) ----
 async function addJob(job) {
   const newJob = { ...job, created_at: new Date().toISOString(), status: 'booked' };
-  const { data, error } = await supabase.from('jobs').insert(newJob).select().single();
+  const { data, error } = await sb.from('jobs').insert(newJob).select().single();
   if (error) { showToast('Failed to save job: ' + error.message, 'error'); return null; }
   window.mockState.jobs.unshift(data);
   const slot = window.mockState.slots.find(s => s.id === job.slot_id);
-  if (slot) { slot.status = 'booked'; await supabase.from('slots').update({ status: 'booked' }).eq('id', job.slot_id); }
+  if (slot) { slot.status = 'booked'; await sb.from('slots').update({ status: 'booked' }).eq('id', job.slot_id); }
   return data;
 }
 
 async function assignTech(slotId, techId) {
-  await supabase.from('slots').update({ technician_id: techId, status: 'booked' }).eq('id', slotId);
+  await sb.from('slots').update({ technician_id: techId, status: 'booked' }).eq('id', slotId);
   const slot = window.mockState.slots.find(s => s.id === slotId);
   if (slot) { slot.technician_id = techId; slot.status = 'booked'; }
   const jobs = window.mockState.jobs.filter(j => j.slot_id === slotId && j.status === 'booked');
   for (const j of jobs) {
-    await supabase.from('jobs').update({ status: 'assigned' }).eq('id', j.id);
+    await sb.from('jobs').update({ status: 'assigned' }).eq('id', j.id);
     j.status = 'assigned';
   }
 }
 
 async function completeJob(jobId, updateData) {
-  await supabase.from('jobs').update({ status: 'completed' }).eq('id', jobId);
+  await sb.from('jobs').update({ status: 'completed' }).eq('id', jobId);
   const job = window.mockState.jobs.find(j => j.id === jobId);
   if (job) job.status = 'completed';
-  await supabase.from('job_updates').insert({ job_id: jobId, tech_id: window.currentUser?.id, ...updateData, updated_at: new Date().toISOString() }).catch(() => {});
+  await sb.from('job_updates').insert({ job_id: jobId, tech_id: window.currentUser?.id, ...updateData, updated_at: new Date().toISOString() }).catch(() => {});
 }
 
 async function blockSlotDB(slotId) {
-  await supabase.from('slots').update({ status: 'blocked' }).eq('id', slotId);
+  await sb.from('slots').update({ status: 'blocked' }).eq('id', slotId);
   const slot = window.mockState.slots.find(s => s.id === slotId);
   if (slot) slot.status = 'blocked';
 }
 
 async function unblockSlotDB(slotId) {
-  await supabase.from('slots').update({ status: 'available' }).eq('id', slotId);
+  await sb.from('slots').update({ status: 'available' }).eq('id', slotId);
   const slot = window.mockState.slots.find(s => s.id === slotId);
   if (slot) slot.status = 'available';
 }
 
 async function createSlotDB(slotData) {
-  const { data, error } = await supabase.from('slots').insert(slotData).select().single();
+  const { data, error } = await sb.from('slots').insert(slotData).select().single();
   if (error) { showToast('Failed to create slot: ' + error.message, 'error'); return null; }
   window.mockState.slots.push(data);
   return data;
 }
 
 async function addUserDB(userData) {
-  const { data, error } = await supabase.from('users').insert(userData).select().single();
+  const { data, error } = await sb.from('users').insert(userData).select().single();
   if (error) { showToast('Failed to add user: ' + error.message, 'error'); return null; }
   window.mockState.users.push(data);
   return data;
