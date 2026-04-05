@@ -521,7 +521,7 @@ tbody tr:hover { background: var(--bg-hover); }
         <input type="password" id="login-password" placeholder="••••••••" />
       </div>
       <div id="login-error" class="login-error hidden"></div>
-      <button class="btn btn-primary btn-full" onclick="debugLogin()">
+      <button class="btn btn-primary btn-full" onclick="handleLogin()">
         <span id="login-btn-text">Sign In</span>
       </button>
     </div>
@@ -593,36 +593,26 @@ tbody tr:hover { background: var(--bg-hover); }
 
 <script>
 // ============================================================
-// DEBUG LOGIN
-function debugLogin() {
-  var errEl = document.getElementById("login-error");
-  errEl.classList.remove("hidden");
-  errEl.textContent = "⏳ Button clicked...";
-  try {
-    if (!window.supabase) { errEl.textContent = "❌ Supabase library not loaded. No internet?"; return; }
-    errEl.textContent = "✅ Supabase loaded. Signing in...";
-    handleLogin();
-  } catch(e) {
-    errEl.textContent = "❌ JS Error: " + e.message;
-  }
-}
-
 // SUPABASE CLIENT
 // ============================================================
 const SUPABASE_URL = 'https://egdseuuzjpqwpeclpujj.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnZHNldXV6anBxd3BlY2xwdWpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzODQxNDUsImV4cCI6MjA5MDk2MDE0NX0.n1oZDVPtN68ExgrWMi8bzgleXlz4aIXsqPPQG6BGeDE';
+let sb;
 
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+function initSb() {
+  if (!sb) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+  return sb;
+}
 
 async function handleLogin() {
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
   const btn = document.getElementById('login-btn-text');
-  const errEl = document.getElementById('login-error');
   if (!email || !password) { showLoginError('Please enter email and password.'); return; }
   btn.textContent = 'Signing in...';
-  errEl.classList.add('hidden');
+  document.getElementById('login-error').classList.add('hidden');
   try {
+    initSb();
     const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
     await loadUserAndInit(data.user);
@@ -652,14 +642,24 @@ async function quickLogin(role) {
 
 async function loadUserAndInit(authUser) {
   try {
-    const { data: profile } = await sb.from('users').select('*').eq('id', authUser.id).single();
-    const user = { id: authUser.id, email: authUser.email, name: profile?.name || authUser.email, role: profile?.role || 'sales' };
+    initSb();
+    const { data: profile, error } = await sb.from('users').select('*').eq('id', authUser.id).single();
+    if (error && error.code !== 'PGRST116') console.warn('Profile fetch error:', error.message);
+    const user = {
+      id: authUser.id,
+      email: authUser.email,
+      name: profile?.name || authUser.email,
+      role: profile?.role || 'sales'
+    };
     window.currentUser = user;
-    initApp(user);
-  } catch (err) { quickLogin('sales'); }
+    await initApp(user);
+  } catch (err) {
+    showLoginError('Login succeeded but failed to load profile: ' + err.message);
+  }
 }
 
 async function handleLogout() {
+  initSb();
   await sb.auth.signOut().catch(() => {});
   window.currentUser = null;
   document.getElementById('app').classList.add('hidden');
@@ -670,6 +670,7 @@ async function handleLogout() {
 
 async function checkSession() {
   try {
+    initSb();
     const { data: { session } } = await sb.auth.getSession();
     if (session?.user) await loadUserAndInit(session.user);
   } catch (e) {}
@@ -741,17 +742,34 @@ function getTechnicians() { return window.mockState.users.filter(u => u.role ===
 // ---- LOAD ALL DATA FROM SUPABASE ----
 async function loadAppData() {
   try {
+    initSb();
     const [jobsRes, slotsRes, usersRes, servicesRes] = await Promise.all([
       sb.from('jobs').select('*').order('created_at', { ascending: false }),
       sb.from('slots').select('*').order('time', { ascending: true }),
       sb.from('users').select('*'),
       sb.from('services').select('*')
     ]);
-    if (jobsRes.data) window.mockState.jobs = jobsRes.data;
-    if (slotsRes.data) window.mockState.slots = slotsRes.data;
+    if (jobsRes.error && jobsRes.error.code === '42501') { showToast('⚠️ RLS blocking jobs table — enable read policy in Supabase', 'error'); }
+    else if (jobsRes.data) window.mockState.jobs = jobsRes.data;
+
+    if (slotsRes.error && slotsRes.error.code === '42501') { showToast('⚠️ RLS blocking slots table — enable read policy in Supabase', 'error'); }
+    else if (slotsRes.data) window.mockState.slots = slotsRes.data;
+
     if (usersRes.data) window.mockState.users = usersRes.data;
-    if (servicesRes.data && servicesRes.data.length) window.mockState.services = servicesRes.data;
-  } catch(e) { console.error('Data load error:', e); showToast('Failed to load data from server', 'error'); }
+
+    // Services: use DB data if available, else keep MOCK_SERVICES as fallback
+    if (servicesRes.data && servicesRes.data.length > 0) {
+      window.mockState.services = servicesRes.data.map(s => ({
+        ...s,
+        icon: s.icon || '🔧',
+        color: s.color || '#3b82f6'
+      }));
+    } else {
+      window.mockState.services = [...MOCK_SERVICES];
+    }
+  } catch(e) {
+    console.error('Data load error:', e);
+  }
 }
 
 // ---- WRITE FUNCTIONS (Supabase) ----
@@ -834,7 +852,7 @@ function filterNavForRole(role) {
   document.querySelectorAll('.nav-item').forEach(item => {
     const page = item.dataset.page;
     if (role === 'technician') item.style.display = (page === 'dashboard' || page === 'jobs') ? 'flex' : 'none';
-    else if (role === 'sales') item.style.display = (page === 'users') ? 'none' : 'flex';
+    else if (role === 'sales') item.style.display = (page === 'users' || page === 'slots') ? 'none' : 'flex';
     else item.style.display = 'flex';
   });
 }
@@ -857,6 +875,7 @@ async function navigate(page) {
       if (role === 'technician') content.innerHTML = renderTechnicianDashboard();
       else content.innerHTML = renderJobsPage();
     } else if (page === 'slots') {
+      if (role !== 'scheduler' && role !== 'admin') { navigate('dashboard'); return; }
       content.innerHTML = renderSlotsPage();
     } else if (page === 'users') {
       content.innerHTML = renderUsersPage();
