@@ -470,7 +470,20 @@ tbody tr:hover { background: var(--bg-hover); }
 .tab.active { color: var(--accent-light); border-bottom-color: var(--accent); }
 .tab:hover:not(.active) { color: var(--text-secondary); }
 
-/* ===== RESPONSIVE ===== */
+/* ===== COMPLETION SUMMARY ===== */
+.completion-summary { background: var(--bg-elevated); border: 1px solid rgba(34,197,94,0.25); border-radius: var(--radius); padding: 16px; margin-top: 8px; }
+.completion-summary-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--green); margin-bottom: 10px; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.summary-item { font-size: 12px; }
+.summary-label { color: var(--text-muted); margin-bottom: 2px; }
+.summary-value { color: var(--text-primary); font-weight: 600; }
+/* ===== DATE FILTER ===== */
+.date-filter-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.date-filter-bar input[type="date"] { background: var(--bg-elevated); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: var(--radius-sm); padding: 7px 12px; font-size: 13px; font-family: var(--font-sans); }
+.date-filter-bar input[type="date"]:focus { outline: none; border-color: var(--accent); }
+/* ===== RESCHEDULE ===== */
+.reschedule-notice { background: var(--yellow-dim); border: 1px solid rgba(234,179,8,0.3); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12px; color: var(--yellow); margin-top: 8px; }
+
 @media (max-width: 1100px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .sales-layout { grid-template-columns: 1fr; }
@@ -762,11 +775,12 @@ function getTechnicians() { return window.mockState.users.filter(u => u.role ===
 async function loadAppData() {
   try {
     initSb();
-    const [jobsRes, slotsRes, usersRes, servicesRes] = await Promise.all([
+    const [jobsRes, slotsRes, usersRes, servicesRes, updatesRes] = await Promise.all([
       sb.from('jobs').select('*').order('created_at', { ascending: false }),
       sb.from('slots').select('*').order('time', { ascending: true }),
       sb.from('users').select('*'),
-      sb.from('services').select('*')
+      sb.from('services').select('*'),
+      sb.from('job_updates').select('*')
     ]);
     if (jobsRes.error && jobsRes.error.code === '42501') { showToast('⚠️ RLS blocking jobs table — enable read policy in Supabase', 'error'); }
     else if (jobsRes.data) window.mockState.jobs = jobsRes.data;
@@ -775,6 +789,7 @@ async function loadAppData() {
     else if (slotsRes.data) window.mockState.slots = slotsRes.data;
 
     if (usersRes.data) window.mockState.users = usersRes.data;
+    if (updatesRes.data) window.mockState.updates = updatesRes.data;
 
     // Services: use DB data if available, else keep MOCK_SERVICES as fallback
     if (servicesRes.data && servicesRes.data.length > 0) {
@@ -1086,48 +1101,123 @@ function searchJobs(query) {
 // ============================================================
 function renderSchedulerDashboard() {
   const jobs = window.mockState.jobs, slots = window.mockState.slots;
+  const filterDate = window._schedFilterDate || today();
+  const daySlots = slots.filter(s => s.date === filterDate);
   const stats = [
-    { label: 'Total Slots', value: slots.length, color: 'blue', meta: 'Today' },
-    { label: 'Available', value: slots.filter(s=>s.status==='available').length, color: 'green', meta: 'Ready to book' },
-    { label: 'Booked Slots', value: slots.filter(s=>s.status==='booked').length, color: 'yellow', meta: 'Active jobs' },
-    { label: 'Jobs Active', value: jobs.filter(j=>j.status!=='completed').length, color: 'blue', meta: 'In progress' },
+    { label: 'Total Slots', value: daySlots.length, color: 'blue', meta: filterDate === today() ? 'Today' : filterDate },
+    { label: 'Available', value: daySlots.filter(s=>s.status==='available').length, color: 'green', meta: 'Ready to book' },
+    { label: 'Booked', value: daySlots.filter(s=>s.status==='booked').length, color: 'yellow', meta: 'Active jobs' },
+    { label: 'Jobs Active', value: jobs.filter(j=>j.status!=='completed').length, color: 'blue', meta: 'All time' },
   ];
   return `${renderStatsGrid(stats)}
   <div class="tabs">
-    <div class="tab active" onclick="switchSchedulerTab(this,'slots-tab')">Slot Management</div>
-    <div class="tab" onclick="switchSchedulerTab(this,'jobs-tab')">Job Management</div>
+    <div class="tab active" onclick="switchSchedulerTab(this,'slots-tab')">📅 Slot Management</div>
+    <div class="tab" onclick="switchSchedulerTab(this,'jobs-tab')">📋 Job Management</div>
+    <div class="tab" onclick="switchSchedulerTab(this,'summary-tab')">✅ Completed Summary</div>
   </div>
   <div id="slots-tab">${renderSlotsManagement()}</div>
-  <div id="jobs-tab" class="hidden">${renderJobsManagement()}</div>`;
+  <div id="jobs-tab" class="hidden">${renderJobsManagement()}</div>
+  <div id="summary-tab" class="hidden">${renderCompletedSummary()}</div>`;
 }
 
 function switchSchedulerTab(el, tabId) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); el.classList.add('active');
-  ['slots-tab','jobs-tab'].forEach(id => { const el2 = document.getElementById(id); if (el2) el2.classList.toggle('hidden', id !== tabId); });
+  ['slots-tab','jobs-tab','summary-tab'].forEach(id => { const el2 = document.getElementById(id); if (el2) el2.classList.toggle('hidden', id !== tabId); });
+}
+
+function filterSlotsByDate(val) {
+  window._schedFilterDate = val;
+  const slotsTab = document.getElementById('slots-tab');
+  if (slotsTab) slotsTab.innerHTML = renderSlotsManagement();
 }
 
 function renderSlotsManagement() {
-  const services = window.mockState.services, slots = window.mockState.slots;
+  const services = window.mockState.services;
+  const filterDate = window._schedFilterDate || today();
+  const slots = window.mockState.slots.filter(s => s.date === filterDate);
   return `<div class="page-header"><div><h2>Slot Management</h2><p>Manage availability and assign technicians</p></div><button class="btn btn-primary" onclick="openCreateSlotModal()">+ Create Slot</button></div>
+  <div class="date-filter-bar">
+    <span style="font-size:13px;color:var(--text-muted)">📅 Date:</span>
+    <input type="date" value="${filterDate}" onchange="filterSlotsByDate(this.value)" />
+    <button class="filter-pill ${filterDate===today()?'active':''}" onclick="filterSlotsByDate('${today()}')">Today</button>
+    <button class="filter-pill ${filterDate===tomorrow()?'active':''}" onclick="filterSlotsByDate('${tomorrow()}')">Tomorrow</button>
+  </div>
   ${services.map(svc => {
     const svcSlots = slots.filter(s => s.service_id === svc.id);
     if (!svcSlots.length) return '';
     return `<div class="service-group-header"><div class="service-icon" style="background:${svc.color}22;color:${svc.color}">${svc.icon}</div><span class="service-group-name">${svc.name}</span><span class="text-sm text-muted">${svcSlots.length} slots</span></div><div class="slots-grid" style="margin-bottom:8px">${svcSlots.map(slot => renderSlotCard(slot, svc)).join('')}</div>`;
-  }).join('')}`;
+  }).join('')}
+  ${slots.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">📭</div><p class="empty-state-text">No slots for this date</p><p class="empty-state-sub">Create slots using the button above</p></div>` : ''}`;
 }
 
 function renderSlotCard(slot, svc) {
   const tech = slot.technician_id ? getUser(slot.technician_id) : null;
+  const jobOnSlot = window.mockState.jobs.find(j => j.slot_id === slot.id);
   return `<div class="slot-card">
     <div class="slot-time">${formatTime(slot.time)}</div>
     <div class="slot-service">${svc.icon} ${svc.name}</div>
     <span class="status status-${slot.status}">${slot.status}</span>
-    <div class="slot-tech">${tech ? '👤 '+tech.name : '— Unassigned'}</div>
+    ${jobOnSlot ? `<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">👤 ${jobOnSlot.customer_name}</div>` : ''}
+    <div class="slot-tech">${tech ? '🔧 '+tech.name : '— Unassigned'}</div>
     <div class="slot-actions">
       ${slot.status !== 'blocked' ? `<button class="btn btn-sm btn-secondary" onclick="openAssignModal('${slot.id}')">Assign</button>` : ''}
+      ${jobOnSlot && slot.status !== 'blocked' ? `<button class="btn btn-sm btn-warning" onclick="openRescheduleModal('${jobOnSlot.id}','${slot.id}')">Reschedule</button>` : ''}
       ${slot.status === 'available' ? `<button class="btn btn-sm btn-danger" onclick="blockSlot('${slot.id}')">Block</button>` : ''}
       ${slot.status === 'blocked' ? `<button class="btn btn-sm btn-success" onclick="unblockSlot('${slot.id}')">Unblock</button>` : ''}
     </div>
+  </div>`;
+}
+
+function renderCompletedSummary() {
+  const completedJobs = window.mockState.jobs.filter(j => j.status === 'completed');
+  const updates = window.mockState.updates || [];
+  if (!completedJobs.length) return `<div class="empty-state"><div class="empty-state-icon">📋</div><p class="empty-state-text">No completed jobs yet</p></div>`;
+  const totalCollected = completedJobs.reduce((a, j) => a + (j.final_amount || j.amount || 0), 0);
+  const totalAdvance = completedJobs.reduce((a, j) => a + (j.advance || 0), 0);
+  return `
+  <div class="stats-grid" style="margin-bottom:20px">
+    <div class="stat-card green"><div class="stat-label">Completed Jobs</div><div class="stat-value">${completedJobs.length}</div><div class="stat-meta">All time</div></div>
+    <div class="stat-card blue"><div class="stat-label">Total Revenue</div><div class="stat-value" style="font-size:20px">₹${totalCollected.toLocaleString()}</div><div class="stat-meta">Collected</div></div>
+    <div class="stat-card yellow"><div class="stat-label">Total Advance</div><div class="stat-value" style="font-size:20px">₹${totalAdvance.toLocaleString()}</div><div class="stat-meta">Pre-collected</div></div>
+    <div class="stat-card green"><div class="stat-label">Balance Collected</div><div class="stat-value" style="font-size:20px">₹${(totalCollected - totalAdvance).toLocaleString()}</div><div class="stat-meta">On-site</div></div>
+  </div>
+  <div class="page-header"><div><h2>Completed Jobs Summary</h2><p>Full technician reports</p></div></div>
+  <div style="display:flex;flex-direction:column;gap:16px">
+  ${completedJobs.map(job => {
+    const svc = getService(job.service_id), slot = getSlot(job.slot_id), tech = slot ? getUser(slot.technician_id) : null;
+    const upd = updates.find(u => u.job_id === job.id) || {};
+    const finalAmt = upd.final_amount || job.final_amount || job.amount || 0;
+    const advance = job.advance || 0;
+    const balance = finalAmt - advance;
+    return `<div class="tech-job-card">
+      <div class="tech-job-header">
+        <div>
+          <div class="tech-customer-name">${job.customer_name}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${svc.icon} ${svc.name} · ${job.place}</div>
+        </div>
+        <span class="status status-completed">completed</span>
+      </div>
+      <div class="tech-job-meta">
+        <div class="tech-meta-item"><span class="tech-meta-label">Phone</span><span class="tech-meta-value">${job.phone}</span></div>
+        <div class="tech-meta-item"><span class="tech-meta-label">Technician</span><span class="tech-meta-value">${tech ? tech.name : '—'}</span></div>
+        <div class="tech-meta-item"><span class="tech-meta-label">Slot Time</span><span class="tech-meta-value mono">${slot ? formatTime(slot.time) : '—'} · ${slot?.date||'—'}</span></div>
+        <div class="tech-meta-item"><span class="tech-meta-label">Payment</span><span class="tech-meta-value">${upd.payment_mode||job.payment_mode||'—'}</span></div>
+      </div>
+      <div class="completion-summary">
+        <div class="completion-summary-title">✅ Work Report</div>
+        <div class="summary-grid">
+          <div class="summary-item"><div class="summary-label">Site In</div><div class="summary-value mono">${upd.site_in||job.site_in||'—'}</div></div>
+          <div class="summary-item"><div class="summary-label">Site Out</div><div class="summary-value mono">${upd.site_out||job.site_out||'—'}</div></div>
+          <div class="summary-item"><div class="summary-label">Quoted Amount</div><div class="summary-value mono">₹${job.amount?.toLocaleString()||'0'}</div></div>
+          <div class="summary-item"><div class="summary-label">Final Amount</div><div class="summary-value mono" style="color:var(--green)">₹${finalAmt.toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Advance Paid</div><div class="summary-value mono">₹${advance.toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Balance Collected</div><div class="summary-value mono" style="color:var(--yellow)">₹${balance.toLocaleString()}</div></div>
+        </div>
+        ${upd.work_done||job.work_done ? `<div style="margin-top:10px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Work Done</div><div style="color:var(--text-secondary)">${upd.work_done||job.work_done}</div></div>` : ''}
+        ${upd.issues||job.issues ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Issues Found</div><div style="color:var(--text-secondary)">${upd.issues||job.issues}</div></div>` : ''}
+      </div>
+    </div>`;
+  }).join('')}
   </div>`;
 }
 
@@ -1135,7 +1225,7 @@ function renderJobsManagement() {
   const jobs = window.mockState.jobs;
   return `<div class="scheduler-layout">
     <div>
-      <div class="page-header"><div><h2>All Jobs</h2><p>Click a row to manage job details</p></div></div>
+      <div class="page-header"><div><h2>All Jobs</h2><p>Click a row to manage</p></div></div>
       <div class="filters-bar">
         <div class="filter-pill active" onclick="filterSchedulerJobs(this,'all')">All</div>
         <div class="filter-pill" onclick="filterSchedulerJobs(this,'booked')">Unassigned</div>
@@ -1152,9 +1242,9 @@ function renderJobsManagement() {
 
 function renderSchedulerJobsTable(jobs) {
   if (!jobs.length) return `<div class="empty-state"><div class="empty-state-icon">📋</div><p class="empty-state-text">No jobs</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Service</th><th>Slot</th><th>Technician</th><th>Amount</th><th>Status</th></tr></thead><tbody>${jobs.map(job => {
+  return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Service</th><th>Date</th><th>Slot</th><th>Technician</th><th>Amount</th><th>Status</th></tr></thead><tbody>${jobs.map(job => {
     const svc = getService(job.service_id), slot = getSlot(job.slot_id), tech = slot ? getUser(slot.technician_id) : null;
-    return `<tr onclick="showJobDetailPanel('${job.id}')"><td><div style="font-weight:600">${job.customer_name}</div><div class="text-sm text-muted">${job.place}</div></td><td>${svc.icon} ${svc.name}</td><td class="mono text-sm">${slot ? formatTime(slot.time) : '—'}</td><td>${tech ? tech.name : '<span class="text-muted">—</span>'}</td><td class="mono">₹${job.amount.toLocaleString()}</td><td><span class="status status-${job.status}">${job.status}</span></td></tr>`;
+    return `<tr onclick="showJobDetailPanel('${job.id}')"><td><div style="font-weight:600">${job.customer_name}</div><div class="text-sm text-muted">${job.place}</div></td><td>${svc.icon} ${svc.name}</td><td class="text-sm">${slot?.date||'—'}</td><td class="mono text-sm">${slot ? formatTime(slot.time) : '—'}</td><td>${tech ? tech.name : '<span class="text-muted">—</span>'}</td><td class="mono">₹${job.amount?.toLocaleString()||0}<br><span class="text-xs text-muted">Adv:₹${(job.advance||0).toLocaleString()}</span></td><td><span class="status status-${job.status}">${job.status}</span></td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 
@@ -1166,18 +1256,36 @@ function showJobDetailPanel(jobId) {
   const panel = document.getElementById('job-detail-panel');
   if (!panel) return;
   panel.className = 'detail-panel';
+  const upd = (window.mockState.updates||[]).find(u => u.job_id === job.id) || {};
+  const finalAmt = upd.final_amount || job.final_amount || job.amount || 0;
+  const balance = finalAmt - (job.advance||0);
   panel.innerHTML = `
-    <div class="card-header"><div><div class="card-title">${job.customer_name}</div><div class="card-sub">${svc.icon} ${svc.name}</div></div><span class="status status-${job.status}">${job.status}</span></div>
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px"><div><div style="font-size:15px;font-weight:700">${job.customer_name}</div><div style="font-size:12px;color:var(--text-muted)">${svc.icon} ${svc.name}</div></div><span class="status status-${job.status}">${job.status}</span></div>
     <div class="info-row"><span class="info-key">Phone</span><span class="info-val">${job.phone}</span></div>
     <div class="info-row"><span class="info-key">Place</span><span class="info-val">${job.place}</span></div>
+    <div class="info-row"><span class="info-key">Date</span><span class="info-val">${slot?.date||'—'}</span></div>
     <div class="info-row"><span class="info-key">Time</span><span class="info-val mono">${slot ? formatTime(slot.time) : '—'}</span></div>
-    <div class="info-row"><span class="info-key">Work</span><span class="info-val">${job.work_spec}</span></div>
-    <div class="info-row"><span class="info-key">Amount</span><span class="info-val mono" style="color:var(--green)">₹${job.amount.toLocaleString()}</span></div>
-    <div class="info-row"><span class="info-key">Balance</span><span class="info-val mono" style="color:var(--yellow)">₹${(job.amount-job.advance).toLocaleString()}</span></div>
+    <div class="info-row"><span class="info-key">Technician</span><span class="info-val">${tech ? tech.name : '—'}</span></div>
+    <div class="info-row"><span class="info-key">Quoted</span><span class="info-val mono">₹${(job.amount||0).toLocaleString()}</span></div>
+    <div class="info-row"><span class="info-key">Advance</span><span class="info-val mono">₹${(job.advance||0).toLocaleString()}</span></div>
+    <div class="info-row"><span class="info-key">Balance</span><span class="info-val mono" style="color:var(--yellow)">₹${balance.toLocaleString()}</span></div>
+    ${job.status === 'completed' ? `
+    <div class="completion-summary" style="margin-top:12px">
+      <div class="completion-summary-title">✅ Work Report</div>
+      <div class="summary-grid">
+        <div class="summary-item"><div class="summary-label">Site In</div><div class="summary-value">${upd.site_in||'—'}</div></div>
+        <div class="summary-item"><div class="summary-label">Site Out</div><div class="summary-value">${upd.site_out||'—'}</div></div>
+        <div class="summary-item"><div class="summary-label">Final Amount</div><div class="summary-value" style="color:var(--green)">₹${finalAmt.toLocaleString()}</div></div>
+        <div class="summary-item"><div class="summary-label">Payment</div><div class="summary-value">${upd.payment_mode||'—'}</div></div>
+      </div>
+      ${upd.work_done ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">${upd.work_done}</div>` : ''}
+    </div>` : `
     <div class="divider"></div>
-    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">${job.work_details}</div>
-    ${job.location_link ? `<a href="${job.location_link}" target="_blank" class="btn btn-secondary btn-sm btn-full" style="margin-bottom:12px">🗺 Open Map</a>` : ''}
-    ${job.status !== 'completed' ? `<div class="form-group" style="margin-bottom:12px"><label>Assign Technician</label><select id="panel-tech-select"><option value="">Select...</option>${techs.map(t=>`<option value="${t.id}" ${tech?.id===t.id?'selected':''}>${t.name}</option>`).join('')}</select></div><button class="btn btn-primary btn-full" onclick="doAssignFromPanel('${job.slot_id}','${job.id}')">✓ Assign Technician</button>` : `<div class="status status-completed" style="width:fit-content">Job Completed</div>`}`;
+    <div class="form-group" style="margin-bottom:8px"><label>Assign Technician</label><select id="panel-tech-select"><option value="">Select...</option>${techs.map(t=>`<option value="${t.id}" ${tech?.id===t.id?'selected':''}>${t.name}</option>`).join('')}</select></div>
+    <button class="btn btn-primary btn-full" style="margin-bottom:8px" onclick="doAssignFromPanel('${job.slot_id}','${job.id}')">✓ Assign Technician</button>
+    <button class="btn btn-warning btn-full" onclick="openRescheduleModal('${job.id}','${job.slot_id}')">🔄 Reschedule</button>`}
+    ${job.location_link ? `<a href="${job.location_link}" target="_blank" class="btn btn-secondary btn-sm btn-full" style="margin-top:8px">🗺 Open Map</a>` : ''}
+    ${job.reschedule_reason ? `<div class="reschedule-notice">⚠️ Rescheduled: ${job.reschedule_reason}</div>` : ''}`;
 }
 
 async function doAssignFromPanel(slotId, jobId) {
@@ -1192,7 +1300,7 @@ async function doAssignFromPanel(slotId, jobId) {
 
 function filterSchedulerJobs(el, status) {
   if (!el) return;
-  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active')); el.classList.add('active'); el.dataset.status = status;
+  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active')); el.classList.add('active');
   const filtered = status === 'all' ? window.mockState.jobs : status === 'booked' ? window.mockState.jobs.filter(j=>j.status==='booked') : window.mockState.jobs.filter(j=>j.status===status);
   const wrap = document.getElementById('sched-jobs-wrap'); if (wrap) wrap.innerHTML = renderSchedulerJobsTable(filtered);
 }
@@ -1203,7 +1311,7 @@ function openAssignModal(slotId) {
   const svc = getService(slot.service_id), techs = getTechnicians(), currentTech = slot.technician_id ? getUser(slot.technician_id) : null;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay'; modal.id = 'assign-modal';
-  modal.innerHTML = `<div class="modal"><div class="modal-header"><div class="modal-title">Assign Technician</div><button class="modal-close" onclick="closeModal('assign-modal')">✕</button></div><div style="margin-bottom:16px"><div class="text-sm text-muted">${svc.icon} ${svc.name} · ${formatTime(slot.time)}</div>${currentTech ? `<div class="text-sm" style="margin-top:4px">Current: ${currentTech.name}</div>` : ''}</div><div class="modal-form"><div class="form-group"><label>Select Technician</label><select id="assign-tech-select"><option value="">Choose technician...</option>${techs.map(t=>`<option value="${t.id}" ${currentTech?.id===t.id?'selected':''}>${t.name} — ${t.phone}</option>`).join('')}</select></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('assign-modal')">Cancel</button><button class="btn btn-primary" onclick="confirmAssign('${slotId}')">Assign</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="modal-header"><div class="modal-title">Assign Technician</div><button class="modal-close" onclick="closeModal('assign-modal')">✕</button></div><div style="margin-bottom:16px"><div class="text-sm text-muted">${svc.icon} ${svc.name} · ${formatTime(slot.time)} · ${slot.date}</div>${currentTech ? `<div class="text-sm" style="margin-top:4px">Current: ${currentTech.name}</div>` : ''}</div><div class="modal-form"><div class="form-group"><label>Select Technician</label><select id="assign-tech-select"><option value="">Choose technician...</option>${techs.map(t=>`<option value="${t.id}" ${currentTech?.id===t.id?'selected':''}>${t.name} — ${t.phone}</option>`).join('')}</select></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('assign-modal')">Cancel</button><button class="btn btn-primary" onclick="confirmAssign('${slotId}')">Assign</button></div></div>`;
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('assign-modal'); });
 }
@@ -1217,12 +1325,74 @@ async function confirmAssign(slotId) {
 async function blockSlot(slotId) { await blockSlotDB(slotId); showToast('Slot blocked', 'info'); navigate('dashboard'); }
 async function unblockSlot(slotId) { await unblockSlotDB(slotId); showToast('Slot unblocked', 'success'); navigate('dashboard'); }
 
-function openCreateSlotModal() {
+// ---- RESCHEDULE ----
+function openRescheduleModal(jobId, oldSlotId) {
+  const job = window.mockState.jobs.find(j => j.id === jobId);
+  if (!job) return;
   const services = window.mockState.services;
-  const times = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
+  const times = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','12:00','13:00','14:00','14:30','15:00','16:00','17:00','18:00'];
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay'; modal.id = 'reschedule-modal';
+  modal.innerHTML = `<div class="modal modal-lg">
+    <div class="modal-header"><div class="modal-title">🔄 Reschedule — ${job.customer_name}</div><button class="modal-close" onclick="closeModal('reschedule-modal')">✕</button></div>
+    <div style="background:var(--yellow-dim);border:1px solid rgba(234,179,8,0.3);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;color:var(--yellow);margin-bottom:16px">
+      ⚠️ This will cancel the current slot and create a new one. The customer will need to be informed.
+    </div>
+    <div class="modal-form">
+      <div class="form-group"><label>Reason for Rescheduling *</label><textarea id="rs-reason" placeholder="e.g. Technician unavailable, customer requested change, emergency..." rows="3"></textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>New Date *</label><input type="date" id="rs-date" value="${today()}" /></div>
+        <div class="form-group"><label>New Time *</label><select id="rs-time">${times.map(t=>`<option value="${t}">${formatTime(t)}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-group"><label>Service</label><select id="rs-service">${services.map(s=>`<option value="${s.id}" ${s.id===job.service_id?'selected':''}>${s.icon} ${s.name}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Assign Technician (optional)</label><select id="rs-tech"><option value="">Assign later...</option>${getTechnicians().map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('reschedule-modal')">Cancel</button>
+      <button class="btn btn-warning" onclick="confirmReschedule('${jobId}','${oldSlotId}')">🔄 Confirm Reschedule</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal('reschedule-modal'); });
+}
+
+async function confirmReschedule(jobId, oldSlotId) {
+  const reason = document.getElementById('rs-reason')?.value?.trim();
+  const date = document.getElementById('rs-date')?.value;
+  const time = document.getElementById('rs-time')?.value;
+  const serviceId = document.getElementById('rs-service')?.value;
+  const techId = document.getElementById('rs-tech')?.value || null;
+  if (!reason) { showToast('Please enter a reason for rescheduling', 'error'); return; }
+  if (!date || !time) { showToast('Please select new date and time', 'error'); return; }
+
+  // 1. Free old slot
+  await sb.from('slots').update({ status: 'available', technician_id: null }).eq('id', oldSlotId);
+  const oldSlot = window.mockState.slots.find(s => s.id === oldSlotId);
+  if (oldSlot) { oldSlot.status = 'available'; oldSlot.technician_id = null; }
+
+  // 2. Create new slot
+  const { data: newSlot, error: slotErr } = await sb.from('slots').insert({ service_id: serviceId, date, time, status: techId ? 'booked' : 'available', technician_id: techId }).select().single();
+  if (slotErr) { showToast('Failed to create new slot: ' + slotErr.message, 'error'); return; }
+  window.mockState.slots.push(newSlot);
+
+  // 3. Update job with new slot + reason + status
+  const newStatus = techId ? 'assigned' : 'booked';
+  const { error: jobErr } = await sb.from('jobs').update({ slot_id: newSlot.id, status: newStatus, reschedule_reason: reason }).eq('id', jobId);
+  if (jobErr) { showToast('Failed to update job: ' + jobErr.message, 'error'); return; }
+  const job = window.mockState.jobs.find(j => j.id === jobId);
+  if (job) { job.slot_id = newSlot.id; job.status = newStatus; job.reschedule_reason = reason; }
+
+  closeModal('reschedule-modal');
+  showToast(`Job rescheduled to ${date} at ${formatTime(time)}`, 'success');
+  navigate('dashboard');
+}
+
+function openCreateSlotModal(prefillDate, prefillService) {
+  const services = window.mockState.services;
+  const times = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','12:00','13:00','14:00','14:30','15:00','16:00','17:00','18:00'];
   const modal = document.createElement('div');
   modal.className = 'modal-overlay'; modal.id = 'create-slot-modal';
-  modal.innerHTML = `<div class="modal"><div class="modal-header"><div class="modal-title">Create New Slot</div><button class="modal-close" onclick="closeModal('create-slot-modal')">✕</button></div><div class="modal-form"><div class="form-group"><label>Service *</label><select id="cs-service"><option value="">Select service</option>${services.map(s=>`<option value="${s.id}">${s.icon} ${s.name}</option>`).join('')}</select></div><div class="form-row"><div class="form-group"><label>Date *</label><input type="date" id="cs-date" value="${today()}" /></div><div class="form-group"><label>Time *</label><select id="cs-time">${times.map(t=>`<option value="${t}">${formatTime(t)}</option>`).join('')}</select></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('create-slot-modal')">Cancel</button><button class="btn btn-primary" onclick="createSlot()">Create Slot</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="modal-header"><div class="modal-title">Create New Slot</div><button class="modal-close" onclick="closeModal('create-slot-modal')">✕</button></div><div class="modal-form"><div class="form-group"><label>Service *</label><select id="cs-service"><option value="">Select service</option>${services.map(s=>`<option value="${s.id}" ${s.id==prefillService?'selected':''}>${s.icon} ${s.name}</option>`).join('')}</select></div><div class="form-row"><div class="form-group"><label>Date *</label><input type="date" id="cs-date" value="${prefillDate||today()}" /></div><div class="form-group"><label>Time *</label><select id="cs-time">${times.map(t=>`<option value="${t}">${formatTime(t)}</option>`).join('')}</select></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('create-slot-modal')">Cancel</button><button class="btn btn-primary" onclick="createSlot()">Create Slot</button></div></div>`;
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if (e.target === modal) closeModal('create-slot-modal'); });
 }
@@ -1236,6 +1406,7 @@ async function createSlot() {
 }
 
 function renderSlotsPage() { return renderSchedulerDashboard(); }
+function tomorrow() { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().split('T')[0]; }
 
 // ============================================================
 // TECHNICIAN DASHBOARD
@@ -1286,7 +1457,10 @@ function renderTechJobCard(job, completed = false) {
       </div>
       ${workState.started && !workState.ended ? `<div style="margin-top:8px;padding:8px 12px;background:var(--green-dim);border:1px solid rgba(34,197,94,0.3);border-radius:var(--radius-sm);font-size:12px;color:var(--green)">● Work started at ${workState.startTime}</div>` : ''}
       ${workState.ended ? renderWorkSubmitForm(job) : ''}
-    ` : `<div style="padding:8px 12px;background:var(--blue-dim);border:1px solid rgba(59,130,246,0.25);border-radius:var(--radius-sm);font-size:12px;color:var(--accent-light)">✓ Completed · Balance collected: ₹${(job.amount-job.advance).toLocaleString()}</div>`}
+    ` : `<div style="padding:8px 12px;background:var(--blue-dim);border:1px solid rgba(59,130,246,0.25);border-radius:var(--radius-sm);font-size:12px;color:var(--accent-light);display:flex;align-items:center;justify-content:space-between">
+      <span>✓ Completed · Balance collected: ₹${(( job.final_amount||job.amount||0)-(job.advance||0)).toLocaleString()}</span>
+      <button class="btn btn-sm btn-secondary" onclick="downloadWorkReportPDF('${job.id}')" style="font-size:11px;padding:4px 10px">📄 Report</button>
+    </div>`}
   </div>`;
 }
 
@@ -1328,10 +1502,128 @@ async function submitWork(jobId) {
   const workDone = document.getElementById(`wd-${jobId}`)?.value?.trim();
   if (!workDone) { showToast('Please describe the work done', 'error'); return; }
   const state = window.techWorkState[jobId] || {};
-  await completeJob(jobId, { site_in: state.startTimeVal, site_out: state.endTimeVal, final_amount: parseFloat(document.getElementById(`wa-${jobId}`)?.value)||0, payment_mode: document.getElementById(`wp-${jobId}`)?.value, work_done: workDone, issues: document.getElementById(`wi-${jobId}`)?.value?.trim()||'None' });
+  const finalAmount = parseFloat(document.getElementById(`wa-${jobId}`)?.value)||0;
+  const paymentMode = document.getElementById(`wp-${jobId}`)?.value;
+  const issues = document.getElementById(`wi-${jobId}`)?.value?.trim()||'None';
+  const updateData = { site_in: state.startTimeVal, site_out: state.endTimeVal, final_amount: finalAmount, payment_mode: paymentMode, work_done: workDone, issues };
+  // Save final_amount back to job too for easy access
+  await sb.from('jobs').update({ final_amount: finalAmount, payment_mode: paymentMode, site_in: state.startTimeVal, site_out: state.endTimeVal, work_done: workDone, issues }).eq('id', jobId);
+  await completeJob(jobId, updateData);
+  const job = window.mockState.jobs.find(j => j.id === jobId);
+  if (job) { job.final_amount = finalAmount; job.payment_mode = paymentMode; job.site_in = state.startTimeVal; job.site_out = state.endTimeVal; job.work_done = workDone; job.issues = issues; }
   delete window.techWorkState[jobId];
   showToast('Work report submitted! Job marked complete.', 'success');
-  setTimeout(() => navigate('dashboard'), 500);
+  setTimeout(() => {
+    navigate('dashboard');
+    setTimeout(() => {
+      // Offer PDF download after dashboard loads
+      if (job) showPdfDownloadBanner(job, updateData);
+    }, 800);
+  }, 500);
+}
+
+function showPdfDownloadBanner(job, upd) {
+  const existing = document.getElementById('pdf-banner');
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.id = 'pdf-banner';
+  banner.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--bg-elevated);border:1px solid rgba(34,197,94,0.4);border-radius:var(--radius);padding:14px 20px;display:flex;align-items:center;gap:14px;z-index:9999;box-shadow:var(--shadow);min-width:320px;';
+  banner.innerHTML = `<span style="font-size:20px">📄</span><div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--green)">Work Report Ready</div><div style="font-size:12px;color:var(--text-muted)">Download PDF for ${job.customer_name}</div></div><button class="btn btn-success btn-sm" onclick="downloadWorkReportPDF('${job.id}')">Download</button><button onclick="document.getElementById('pdf-banner').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;padding:4px">✕</button>`;
+  document.body.appendChild(banner);
+  setTimeout(() => banner.remove(), 15000);
+}
+
+function downloadWorkReportPDF(jobId) {
+  const job = window.mockState.jobs.find(j => j.id === jobId);
+  if (!job) return;
+  const svc = getService(job.service_id);
+  const slot = getSlot(job.slot_id);
+  const tech = window.currentUser;
+  const finalAmt = job.final_amount || job.amount || 0;
+  const advance = job.advance || 0;
+  const balance = finalAmt - advance;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Work Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; color: #1a1a2e; font-size: 14px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 24px; }
+    .logo { font-size: 22px; font-weight: 800; color: #3b82f6; letter-spacing: -0.5px; }
+    .report-title { font-size: 12px; color: #666; margin-top: 4px; }
+    .badge { background: #dcfce7; color: #16a34a; border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .field label { font-size: 11px; color: #888; display: block; margin-bottom: 2px; }
+    .field span { font-size: 14px; font-weight: 600; color: #1a1a2e; }
+    .amount-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+    .amount-row:last-child { border-bottom: none; font-weight: 700; font-size: 15px; }
+    .amount-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    .notes-box { background: #f8fafc; border-radius: 8px; padding: 14px; font-size: 13px; color: #444; line-height: 1.6; }
+    .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
+    @media print { body { margin: 20px; } }
+  </style></head><body>
+  <div class="header">
+    <div><div class="logo">⚡ FieldOps</div><div class="report-title">Service Work Report</div><div style="font-size:12px;color:#888;margin-top:4px">Generated: ${new Date().toLocaleString('en-IN')}</div></div>
+    <span class="badge">✓ COMPLETED</span>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Customer Details</div>
+    <div class="grid">
+      <div class="field"><label>Customer Name</label><span>${job.customer_name}</span></div>
+      <div class="field"><label>Phone</label><span>${job.phone}${job.alt_phone ? ' / '+job.alt_phone : ''}</span></div>
+      <div class="field"><label>Location</label><span>${job.place}</span></div>
+      <div class="field"><label>Address</label><span>${job.address||'—'}</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Service Details</div>
+    <div class="grid">
+      <div class="field"><label>Service Type</label><span>${svc.name}</span></div>
+      <div class="field"><label>Work Specification</label><span>${job.work_spec||'—'}</span></div>
+      <div class="field"><label>Date</label><span>${slot?.date||'—'}</span></div>
+      <div class="field"><label>Scheduled Time</label><span>${slot ? formatTime(slot.time) : '—'}</span></div>
+      <div class="field"><label>Site In</label><span>${job.site_in||'—'}</span></div>
+      <div class="field"><label>Site Out</label><span>${job.site_out||'—'}</span></div>
+      <div class="field"><label>Technician</label><span>${tech?.name||'—'}</span></div>
+      <div class="field"><label>Payment Mode</label><span style="text-transform:capitalize">${job.payment_mode||'—'}</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Amount Summary</div>
+    <div class="amount-box">
+      <div class="amount-row"><span>Quoted Amount</span><span>₹${(job.amount||0).toLocaleString()}</span></div>
+      <div class="amount-row"><span>Final Amount Charged</span><span>₹${finalAmt.toLocaleString()}</span></div>
+      <div class="amount-row"><span>Advance Collected</span><span>₹${advance.toLocaleString()}</span></div>
+      <div class="amount-row" style="color:#16a34a"><span>Balance Collected On-Site</span><span>₹${balance.toLocaleString()}</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Work Report</div>
+    <div class="notes-box"><strong>Work Done:</strong><br>${job.work_done||'—'}</div>
+    ${job.issues && job.issues !== 'None' ? `<div class="notes-box" style="margin-top:8px;border-left:3px solid #f59e0b"><strong>Issues Found:</strong><br>${job.issues}</div>` : ''}
+    ${job.work_details ? `<div class="notes-box" style="margin-top:8px"><strong>Original Work Details:</strong><br>${job.work_details}</div>` : ''}
+  </div>
+
+  <div class="footer">
+    <span>FieldOps — Service Operations Platform</span>
+    <span>Job ID: ${job.id}</span>
+  </div>
+  <script>window.onload = () => window.print();<\/script>
+  </body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `WorkReport_${job.customer_name.replace(/\s+/g,'_')}_${slot?.date||'unknown'}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  document.getElementById('pdf-banner')?.remove();
+  showToast('Work report downloaded! Open the file to print/save as PDF.', 'success');
 }
 
 // ============================================================
