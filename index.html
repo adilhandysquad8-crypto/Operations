@@ -734,7 +734,26 @@ function formatTime(t) {
   const hr = parseInt(h);
   return `${hr > 12 ? hr - 12 : hr || 12}:${m} ${hr >= 12 ? 'PM' : 'AM'}`;
 }
-function getService(id) { return window.mockState.services.find(s => s.id === id) || MOCK_SERVICES.find(s => s.id === id) || { name: '—', icon: '?', color: '#888' }; }
+const SERVICE_META = {
+  'ac': { icon: '❄️', color: '#3b82f6' },
+  'electrical': { icon: '⚡', color: '#eab308' },
+  'plumbing': { icon: '🔧', color: '#22c55e' },
+  'carpentry': { icon: '🪚', color: '#f97316' },
+  'pest control': { icon: '🪲', color: '#a855f7' },
+  'cleaning': { icon: '🧹', color: '#06b6d4' },
+  'painting': { icon: '🖌️', color: '#ec4899' },
+};
+function getServiceMeta(name) {
+  if (!name) return { icon: '🔧', color: '#3b82f6' };
+  const key = name.toLowerCase().trim();
+  return SERVICE_META[key] || Object.entries(SERVICE_META).find(([k]) => key.includes(k))?.[1] || { icon: '🔧', color: '#3b82f6' };
+}
+function getService(id) {
+  const svc = window.mockState.services.find(s => s.id === id) || MOCK_SERVICES.find(s => s.id === id);
+  if (!svc) return { name: '—', icon: '?', color: '#888' };
+  const meta = getServiceMeta(svc.name);
+  return { ...svc, icon: svc.icon || meta.icon, color: svc.color || meta.color };
+}
 function getUser(id) { return window.mockState.users.find(u => u.id === id); }
 function getSlot(id) { return window.mockState.slots.find(s => s.id === id); }
 function getTechnicians() { return window.mockState.users.filter(u => u.role === 'technician'); }
@@ -759,11 +778,10 @@ async function loadAppData() {
 
     // Services: use DB data if available, else keep MOCK_SERVICES as fallback
     if (servicesRes.data && servicesRes.data.length > 0) {
-      window.mockState.services = servicesRes.data.map(s => ({
-        ...s,
-        icon: s.icon || '🔧',
-        color: s.color || '#3b82f6'
-      }));
+      window.mockState.services = servicesRes.data.map(s => {
+        const meta = getServiceMeta(s.name);
+        return { ...s, icon: s.icon || meta.icon, color: s.color || meta.color };
+      });
     } else {
       window.mockState.services = [...MOCK_SERVICES];
     }
@@ -798,7 +816,9 @@ async function completeJob(jobId, updateData) {
   await sb.from('jobs').update({ status: 'completed' }).eq('id', jobId);
   const job = window.mockState.jobs.find(j => j.id === jobId);
   if (job) job.status = 'completed';
-  await sb.from('job_updates').insert({ job_id: jobId, tech_id: window.currentUser?.id, ...updateData, updated_at: new Date().toISOString() }).catch(() => {});
+  try {
+    await sb.from('job_updates').insert({ job_id: jobId, tech_id: window.currentUser?.id, ...updateData, updated_at: new Date().toISOString() });
+  } catch(e) { console.warn('job_updates insert failed:', e.message); }
 }
 
 async function blockSlotDB(slotId) {
