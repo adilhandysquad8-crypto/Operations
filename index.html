@@ -319,6 +319,8 @@ textarea { resize: vertical; min-height: 80px; }
 .status-booked { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(234,179,8,0.25); }
 .status-completed { background: var(--blue-dim); color: var(--accent-light); border: 1px solid rgba(59,130,246,0.25); }
 .status-blocked { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
+.status-ongoing { background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); animation: pulse-green 2s infinite; }
+@keyframes pulse-green { 0%,100%{opacity:1} 50%{opacity:0.7} }
 .status-assigned { background: var(--orange-dim); color: var(--orange); border: 1px solid rgba(249,115,22,0.25); }
 
 /* ===== TABLE ===== */
@@ -908,10 +910,11 @@ async function navigate(page) {
       else content.innerHTML = renderTechnicianDashboard();
     } else if (page === 'jobs') {
       if (role === 'technician') content.innerHTML = renderTechnicianDashboard();
+      else if (role === 'scheduler') content.innerHTML = renderSchedulerJobsPage();
       else content.innerHTML = renderJobsPage();
     } else if (page === 'slots') {
       if (role !== 'scheduler' && role !== 'admin') { navigate('dashboard'); return; }
-      content.innerHTML = renderSlotsPage();
+      content.innerHTML = renderSchedulerSlotsPage();
     } else if (page === 'users') {
       content.innerHTML = renderUsersPage();
     }
@@ -1103,13 +1106,13 @@ function renderSchedulerDashboard() {
   const jobs = window.mockState.jobs, slots = window.mockState.slots;
   const filterDate = window._schedFilterDate || today();
   const daySlots = slots.filter(s => s.date === filterDate);
-  const stats = [
-    { label: 'Total Slots', value: daySlots.length, color: 'blue', meta: filterDate === today() ? 'Today' : filterDate },
-    { label: 'Available', value: daySlots.filter(s=>s.status==='available').length, color: 'green', meta: 'Ready to book' },
-    { label: 'Booked', value: daySlots.filter(s=>s.status==='booked').length, color: 'yellow', meta: 'Active jobs' },
-    { label: 'Jobs Active', value: jobs.filter(j=>j.status!=='completed').length, color: 'blue', meta: 'All time' },
-  ];
-  return `${renderStatsGrid(stats)}
+  return `
+  <div class="stats-grid" id="sched-stats">
+    <div class="stat-card blue"><div class="stat-label">Total Slots</div><div class="stat-value">${daySlots.length}</div><div class="stat-meta">${filterDate === today() ? 'Today' : filterDate}</div></div>
+    <div class="stat-card green"><div class="stat-label">Available</div><div class="stat-value">${daySlots.filter(s=>s.status==='available').length}</div><div class="stat-meta">Ready to book</div></div>
+    <div class="stat-card yellow"><div class="stat-label">Booked</div><div class="stat-value">${daySlots.filter(s=>s.status==='booked'||s.status==='assigned').length}</div><div class="stat-meta">Scheduled</div></div>
+    <div class="stat-card green"><div class="stat-label">Ongoing</div><div class="stat-value">${jobs.filter(j=>j.status==='ongoing').length}</div><div class="stat-meta">In progress now 🟢</div></div>
+  </div>
   <div class="tabs">
     <div class="tab active" onclick="switchSchedulerTab(this,'slots-tab')">📅 Slot Management</div>
     <div class="tab" onclick="switchSchedulerTab(this,'jobs-tab')">📋 Job Management</div>
@@ -1127,6 +1130,18 @@ function switchSchedulerTab(el, tabId) {
 
 function filterSlotsByDate(val) {
   window._schedFilterDate = val;
+  // Update stats
+  const slots = window.mockState.slots;
+  const daySlots = slots.filter(s => s.date === val);
+  const jobs = window.mockState.jobs;
+  const statsEl = document.getElementById('sched-stats');
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="stat-card blue"><div class="stat-label">Total Slots</div><div class="stat-value">${daySlots.length}</div><div class="stat-meta">${val === today() ? 'Today' : val}</div></div>
+      <div class="stat-card green"><div class="stat-label">Available</div><div class="stat-value">${daySlots.filter(s=>s.status==='available').length}</div><div class="stat-meta">Ready to book</div></div>
+      <div class="stat-card yellow"><div class="stat-label">Booked</div><div class="stat-value">${daySlots.filter(s=>s.status==='booked'||s.status==='assigned'||s.status==='ongoing').length}</div><div class="stat-meta">Active jobs</div></div>
+      <div class="stat-card orange"><div class="stat-label">Ongoing</div><div class="stat-value">${jobs.filter(j=>j.status==='ongoing').length}</div><div class="stat-meta">In progress now</div></div>`;
+  }
   const slotsTab = document.getElementById('slots-tab');
   if (slotsTab) slotsTab.innerHTML = renderSlotsManagement();
 }
@@ -1153,35 +1168,56 @@ function renderSlotsManagement() {
 function renderSlotCard(slot, svc) {
   const tech = slot.technician_id ? getUser(slot.technician_id) : null;
   const jobOnSlot = window.mockState.jobs.find(j => j.slot_id === slot.id);
-  return `<div class="slot-card">
+  // Show job's actual status if there's a job, otherwise slot status
+  const displayStatus = jobOnSlot ? jobOnSlot.status : slot.status;
+  return `<div class="slot-card" style="${displayStatus==='ongoing'?'border-color:rgba(34,197,94,0.5);box-shadow:0 0 12px rgba(34,197,94,0.1)':''}">
     <div class="slot-time">${formatTime(slot.time)}</div>
     <div class="slot-service">${svc.icon} ${svc.name}</div>
-    <span class="status status-${slot.status}">${slot.status}</span>
-    ${jobOnSlot ? `<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">👤 ${jobOnSlot.customer_name}</div>` : ''}
-    <div class="slot-tech">${tech ? '🔧 '+tech.name : '— Unassigned'}</div>
+    <span class="status status-${displayStatus}">${displayStatus}</span>
+    ${jobOnSlot ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:6px;font-weight:600">👤 ${jobOnSlot.customer_name}</div>` : ''}
+    ${jobOnSlot ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">📞 ${jobOnSlot.phone} · ${jobOnSlot.place}</div>` : ''}
+    ${jobOnSlot && jobOnSlot.status==='ongoing' && jobOnSlot.site_in ? `<div style="font-size:11px;color:#4ade80;margin-top:2px">🟢 Started at ${jobOnSlot.site_in}</div>` : ''}
+    <div class="slot-tech" style="margin-top:6px">${tech ? '🔧 '+tech.name : '— Unassigned'}</div>
     <div class="slot-actions">
-      ${slot.status !== 'blocked' ? `<button class="btn btn-sm btn-secondary" onclick="openAssignModal('${slot.id}')">Assign</button>` : ''}
-      ${jobOnSlot && slot.status !== 'blocked' ? `<button class="btn btn-sm btn-warning" onclick="openRescheduleModal('${jobOnSlot.id}','${slot.id}')">Reschedule</button>` : ''}
-      ${slot.status === 'available' ? `<button class="btn btn-sm btn-danger" onclick="blockSlot('${slot.id}')">Block</button>` : ''}
+      ${slot.status !== 'blocked' && displayStatus !== 'ongoing' && displayStatus !== 'completed' ? `<button class="btn btn-sm btn-secondary" onclick="openAssignModal('${slot.id}')">Assign</button>` : ''}
+      ${jobOnSlot && displayStatus !== 'completed' && displayStatus !== 'ongoing' ? `<button class="btn btn-sm btn-warning" onclick="openRescheduleModal('${jobOnSlot.id}','${slot.id}')">Reschedule</button>` : ''}
+      ${slot.status === 'available' && !jobOnSlot ? `<button class="btn btn-sm btn-danger" onclick="blockSlot('${slot.id}')">Block</button>` : ''}
       ${slot.status === 'blocked' ? `<button class="btn btn-sm btn-success" onclick="unblockSlot('${slot.id}')">Unblock</button>` : ''}
     </div>
   </div>`;
 }
 
+function filterCompletedByDate(val) {
+  window._completedFilterDate = val;
+  const tab = document.getElementById('summary-tab');
+  if (tab) tab.innerHTML = renderCompletedSummary();
+}
+
 function renderCompletedSummary() {
-  const completedJobs = window.mockState.jobs.filter(j => j.status === 'completed');
+  const filterDate = window._completedFilterDate || '';
+  let completedJobs = window.mockState.jobs.filter(j => j.status === 'completed');
+  if (filterDate) {
+    completedJobs = completedJobs.filter(j => {
+      const slot = getSlot(j.slot_id);
+      return slot?.date === filterDate;
+    });
+  }
   const updates = window.mockState.updates || [];
-  if (!completedJobs.length) return `<div class="empty-state"><div class="empty-state-icon">📋</div><p class="empty-state-text">No completed jobs yet</p></div>`;
   const totalCollected = completedJobs.reduce((a, j) => a + (j.final_amount || j.amount || 0), 0);
   const totalAdvance = completedJobs.reduce((a, j) => a + (j.advance || 0), 0);
   return `
-  <div class="stats-grid" style="margin-bottom:20px">
-    <div class="stat-card green"><div class="stat-label">Completed Jobs</div><div class="stat-value">${completedJobs.length}</div><div class="stat-meta">All time</div></div>
-    <div class="stat-card blue"><div class="stat-label">Total Revenue</div><div class="stat-value" style="font-size:20px">₹${totalCollected.toLocaleString()}</div><div class="stat-meta">Collected</div></div>
-    <div class="stat-card yellow"><div class="stat-label">Total Advance</div><div class="stat-value" style="font-size:20px">₹${totalAdvance.toLocaleString()}</div><div class="stat-meta">Pre-collected</div></div>
-    <div class="stat-card green"><div class="stat-label">Balance Collected</div><div class="stat-value" style="font-size:20px">₹${(totalCollected - totalAdvance).toLocaleString()}</div><div class="stat-meta">On-site</div></div>
+  <div class="date-filter-bar" style="margin-bottom:16px">
+    <span style="font-size:13px;color:var(--text-muted)">📅 Filter by date:</span>
+    <input type="date" value="${filterDate}" onchange="filterCompletedByDate(this.value)" />
+    ${filterDate ? `<button class="filter-pill active" onclick="filterCompletedByDate('')">Clear</button>` : `<button class="filter-pill" onclick="filterCompletedByDate('${today()}')">Today</button>`}
   </div>
-  <div class="page-header"><div><h2>Completed Jobs Summary</h2><p>Full technician reports</p></div></div>
+  <div class="stats-grid" style="margin-bottom:20px">
+    <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value">${completedJobs.length}</div><div class="stat-meta">${filterDate||'All time'}</div></div>
+    <div class="stat-card green"><div class="stat-label">Total Revenue</div><div class="stat-value" style="font-size:18px">₹${totalCollected.toLocaleString()}</div><div class="stat-meta">Final amounts</div></div>
+    <div class="stat-card yellow"><div class="stat-label">Advance</div><div class="stat-value" style="font-size:18px">₹${totalAdvance.toLocaleString()}</div><div class="stat-meta">Pre-collected</div></div>
+    <div class="stat-card green"><div class="stat-label">On-site Collected</div><div class="stat-value" style="font-size:18px">₹${(totalCollected-totalAdvance).toLocaleString()}</div><div class="stat-meta">Balance</div></div>
+  </div>
+  ${completedJobs.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">📋</div><p class="empty-state-text">No completed jobs${filterDate?' on this date':''}</p></div>` : ''}
   <div style="display:flex;flex-direction:column;gap:16px">
   ${completedJobs.map(job => {
     const svc = getService(job.service_id), slot = getSlot(job.slot_id), tech = slot ? getUser(slot.technician_id) : null;
@@ -1193,28 +1229,32 @@ function renderCompletedSummary() {
       <div class="tech-job-header">
         <div>
           <div class="tech-customer-name">${job.customer_name}</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${svc.icon} ${svc.name} · ${job.place}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${svc.icon} ${svc.name} · ${job.place} · ${slot?.date||'—'}</div>
         </div>
         <span class="status status-completed">completed</span>
       </div>
       <div class="tech-job-meta">
-        <div class="tech-meta-item"><span class="tech-meta-label">Phone</span><span class="tech-meta-value">${job.phone}</span></div>
+        <div class="tech-meta-item"><span class="tech-meta-label">Phone</span><span class="tech-meta-value">${job.phone}${job.alt_phone?' / '+job.alt_phone:''}</span></div>
         <div class="tech-meta-item"><span class="tech-meta-label">Technician</span><span class="tech-meta-value">${tech ? tech.name : '—'}</span></div>
-        <div class="tech-meta-item"><span class="tech-meta-label">Slot Time</span><span class="tech-meta-value mono">${slot ? formatTime(slot.time) : '—'} · ${slot?.date||'—'}</span></div>
+        <div class="tech-meta-item"><span class="tech-meta-label">Slot Time</span><span class="tech-meta-value mono">${slot ? formatTime(slot.time) : '—'}</span></div>
         <div class="tech-meta-item"><span class="tech-meta-label">Payment</span><span class="tech-meta-value">${upd.payment_mode||job.payment_mode||'—'}</span></div>
       </div>
+      ${job.address ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">📍 ${job.address}</div>` : ''}
+      ${job.work_spec ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">🔧 ${job.work_spec}</div>` : ''}
+      ${job.work_details ? `<div style="font-size:12px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--radius-sm);margin-bottom:8px">${job.work_details}</div>` : ''}
       <div class="completion-summary">
         <div class="completion-summary-title">✅ Work Report</div>
         <div class="summary-grid">
           <div class="summary-item"><div class="summary-label">Site In</div><div class="summary-value mono">${upd.site_in||job.site_in||'—'}</div></div>
           <div class="summary-item"><div class="summary-label">Site Out</div><div class="summary-value mono">${upd.site_out||job.site_out||'—'}</div></div>
-          <div class="summary-item"><div class="summary-label">Quoted Amount</div><div class="summary-value mono">₹${job.amount?.toLocaleString()||'0'}</div></div>
-          <div class="summary-item"><div class="summary-label">Final Amount</div><div class="summary-value mono" style="color:var(--green)">₹${finalAmt.toLocaleString()}</div></div>
-          <div class="summary-item"><div class="summary-label">Advance Paid</div><div class="summary-value mono">₹${advance.toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Quoted</div><div class="summary-value mono">₹${(job.amount||0).toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Final Charged</div><div class="summary-value mono" style="color:var(--green)">₹${finalAmt.toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Advance</div><div class="summary-value mono">₹${advance.toLocaleString()}</div></div>
           <div class="summary-item"><div class="summary-label">Balance Collected</div><div class="summary-value mono" style="color:var(--yellow)">₹${balance.toLocaleString()}</div></div>
         </div>
         ${upd.work_done||job.work_done ? `<div style="margin-top:10px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Work Done</div><div style="color:var(--text-secondary)">${upd.work_done||job.work_done}</div></div>` : ''}
-        ${upd.issues||job.issues ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Issues Found</div><div style="color:var(--text-secondary)">${upd.issues||job.issues}</div></div>` : ''}
+        ${(upd.issues||job.issues) && (upd.issues||job.issues)!=='None' ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Issues Found</div><div style="color:var(--yellow)">${upd.issues||job.issues}</div></div>` : ''}
+        ${job.reschedule_reason ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Reschedule Note</div><div style="color:var(--text-muted)">${job.reschedule_reason}</div></div>` : ''}
       </div>
     </div>`;
   }).join('')}
@@ -1223,28 +1263,40 @@ function renderCompletedSummary() {
 
 function renderJobsManagement() {
   const jobs = window.mockState.jobs;
+  const booked = jobs.filter(j=>j.status==='booked').length;
+  const assigned = jobs.filter(j=>j.status==='assigned').length;
+  const ongoing = jobs.filter(j=>j.status==='ongoing').length;
   return `<div class="scheduler-layout">
     <div>
-      <div class="page-header"><div><h2>All Jobs</h2><p>Click a row to manage</p></div></div>
       <div class="filters-bar">
-        <div class="filter-pill active" onclick="filterSchedulerJobs(this,'all')">All</div>
-        <div class="filter-pill" onclick="filterSchedulerJobs(this,'booked')">Unassigned</div>
-        <div class="filter-pill" onclick="filterSchedulerJobs(this,'assigned')">Assigned</div>
+        <div class="filter-pill active" onclick="filterSchedulerJobs(this,'all')">All (${jobs.length})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'booked')">Booked (${booked})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'assigned')">Assigned (${assigned})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'ongoing')" style="${ongoing>0?'color:var(--green);border-color:rgba(34,197,94,0.4)':''}">🟢 Ongoing (${ongoing})</div>
         <div class="filter-pill" onclick="filterSchedulerJobs(this,'completed')">Completed</div>
       </div>
       <div id="sched-jobs-wrap">${renderSchedulerJobsTable(jobs)}</div>
     </div>
     <div class="detail-panel empty" id="job-detail-panel">
-      <div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◧</div><div>Click a job to view details</div></div>
+      <div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◧</div><div style="font-size:13px;color:var(--text-muted)">Click a job to see all details</div></div>
     </div>
   </div>`;
 }
 
 function renderSchedulerJobsTable(jobs) {
   if (!jobs.length) return `<div class="empty-state"><div class="empty-state-icon">📋</div><p class="empty-state-text">No jobs</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Service</th><th>Date</th><th>Slot</th><th>Technician</th><th>Amount</th><th>Status</th></tr></thead><tbody>${jobs.map(job => {
+  return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Service</th><th>Date</th><th>Time</th><th>Technician</th><th>Amount</th><th>Status</th></tr></thead><tbody>${jobs.map(job => {
     const svc = getService(job.service_id), slot = getSlot(job.slot_id), tech = slot ? getUser(slot.technician_id) : null;
-    return `<tr onclick="showJobDetailPanel('${job.id}')"><td><div style="font-weight:600">${job.customer_name}</div><div class="text-sm text-muted">${job.place}</div></td><td>${svc.icon} ${svc.name}</td><td class="text-sm">${slot?.date||'—'}</td><td class="mono text-sm">${slot ? formatTime(slot.time) : '—'}</td><td>${tech ? tech.name : '<span class="text-muted">—</span>'}</td><td class="mono">₹${job.amount?.toLocaleString()||0}<br><span class="text-xs text-muted">Adv:₹${(job.advance||0).toLocaleString()}</span></td><td><span class="status status-${job.status}">${job.status}</span></td></tr>`;
+    const isOngoing = job.status === 'ongoing';
+    return `<tr onclick="showJobDetailPanel('${job.id}')" style="${isOngoing?'background:rgba(34,197,94,0.05)':''}">
+      <td><div style="font-weight:600">${job.customer_name}</div><div class="text-sm text-muted">${job.place}</div>${job.reschedule_reason?`<div style="font-size:10px;color:var(--yellow)">🔄 Rescheduled</div>`:''}</td>
+      <td>${svc.icon} ${svc.name}</td>
+      <td class="text-sm">${slot?.date||'—'}</td>
+      <td class="mono text-sm">${slot ? formatTime(slot.time) : '—'}${isOngoing&&job.site_in?`<div style="font-size:10px;color:#4ade80">in: ${job.site_in}</div>`:''}</td>
+      <td>${tech ? tech.name : '<span style="color:var(--red);font-size:12px">Unassigned</span>'}</td>
+      <td class="mono">₹${(job.amount||0).toLocaleString()}<br><span class="text-xs text-muted">Adv:₹${(job.advance||0).toLocaleString()}</span></td>
+      <td><span class="status status-${job.status}">${job.status}</span></td>
+    </tr>`;
   }).join('')}</tbody></table></div>`;
 }
 
@@ -1259,33 +1311,42 @@ function showJobDetailPanel(jobId) {
   const upd = (window.mockState.updates||[]).find(u => u.job_id === job.id) || {};
   const finalAmt = upd.final_amount || job.final_amount || job.amount || 0;
   const balance = finalAmt - (job.advance||0);
+  const isActive = job.status !== 'completed';
   panel.innerHTML = `
-    <div class="card-header" style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px"><div><div style="font-size:15px;font-weight:700">${job.customer_name}</div><div style="font-size:12px;color:var(--text-muted)">${svc.icon} ${svc.name}</div></div><span class="status status-${job.status}">${job.status}</span></div>
-    <div class="info-row"><span class="info-key">Phone</span><span class="info-val">${job.phone}</span></div>
-    <div class="info-row"><span class="info-key">Place</span><span class="info-val">${job.place}</span></div>
-    <div class="info-row"><span class="info-key">Date</span><span class="info-val">${slot?.date||'—'}</span></div>
-    <div class="info-row"><span class="info-key">Time</span><span class="info-val mono">${slot ? formatTime(slot.time) : '—'}</span></div>
-    <div class="info-row"><span class="info-key">Technician</span><span class="info-val">${tech ? tech.name : '—'}</span></div>
-    <div class="info-row"><span class="info-key">Quoted</span><span class="info-val mono">₹${(job.amount||0).toLocaleString()}</span></div>
-    <div class="info-row"><span class="info-key">Advance</span><span class="info-val mono">₹${(job.advance||0).toLocaleString()}</span></div>
-    <div class="info-row"><span class="info-key">Balance</span><span class="info-val mono" style="color:var(--yellow)">₹${balance.toLocaleString()}</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+      <div><div style="font-size:15px;font-weight:700">${job.customer_name}</div><div style="font-size:12px;color:var(--text-muted)">${svc.icon} ${svc.name}</div></div>
+      <span class="status status-${job.status}">${job.status}</span>
+    </div>
+    <div class="info-row"><span class="info-key">📞 Phone</span><span class="info-val">${job.phone}${job.alt_phone?' / '+job.alt_phone:''}</span></div>
+    <div class="info-row"><span class="info-key">📍 Place</span><span class="info-val">${job.place}</span></div>
+    ${job.address ? `<div class="info-row"><span class="info-key">🏠 Address</span><span class="info-val" style="font-size:12px">${job.address}</span></div>` : ''}
+    <div class="info-row"><span class="info-key">📅 Date</span><span class="info-val">${slot?.date||'—'}</span></div>
+    <div class="info-row"><span class="info-key">⏰ Slot</span><span class="info-val mono">${slot ? formatTime(slot.time) : '—'}</span></div>
+    <div class="info-row"><span class="info-key">🔧 Technician</span><span class="info-val">${tech ? tech.name : '<span style="color:var(--red)">Unassigned</span>'}</span></div>
+    <div class="info-row"><span class="info-key">🛠 Work Spec</span><span class="info-val">${job.work_spec||'—'}</span></div>
+    ${job.work_details ? `<div style="background:var(--bg-elevated);border-radius:var(--radius-sm);padding:8px 10px;font-size:12px;color:var(--text-secondary);margin:6px 0">${job.work_details}</div>` : ''}
+    <div class="info-row"><span class="info-key">💰 Quoted</span><span class="info-val mono">₹${(job.amount||0).toLocaleString()}</span></div>
+    <div class="info-row"><span class="info-key">💳 Advance</span><span class="info-val mono">₹${(job.advance||0).toLocaleString()}</span></div>
+    <div class="info-row"><span class="info-key">🏦 Balance</span><span class="info-val mono" style="color:var(--yellow)">₹${balance.toLocaleString()}</span></div>
+    ${job.status === 'ongoing' ? `<div style="margin:8px 0;padding:8px 12px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.4);border-radius:var(--radius-sm);font-size:12px;color:#4ade80">🟢 Technician is on-site${job.site_in ? ' since '+job.site_in : ''}</div>` : ''}
     ${job.status === 'completed' ? `
-    <div class="completion-summary" style="margin-top:12px">
+    <div class="completion-summary" style="margin-top:10px">
       <div class="completion-summary-title">✅ Work Report</div>
       <div class="summary-grid">
-        <div class="summary-item"><div class="summary-label">Site In</div><div class="summary-value">${upd.site_in||'—'}</div></div>
-        <div class="summary-item"><div class="summary-label">Site Out</div><div class="summary-value">${upd.site_out||'—'}</div></div>
+        <div class="summary-item"><div class="summary-label">Site In</div><div class="summary-value">${upd.site_in||job.site_in||'—'}</div></div>
+        <div class="summary-item"><div class="summary-label">Site Out</div><div class="summary-value">${upd.site_out||job.site_out||'—'}</div></div>
         <div class="summary-item"><div class="summary-label">Final Amount</div><div class="summary-value" style="color:var(--green)">₹${finalAmt.toLocaleString()}</div></div>
-        <div class="summary-item"><div class="summary-label">Payment</div><div class="summary-value">${upd.payment_mode||'—'}</div></div>
+        <div class="summary-item"><div class="summary-label">Payment</div><div class="summary-value">${upd.payment_mode||job.payment_mode||'—'}</div></div>
       </div>
-      ${upd.work_done ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">${upd.work_done}</div>` : ''}
-    </div>` : `
+      ${upd.work_done||job.work_done ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">${upd.work_done||job.work_done}</div>` : ''}
+      ${(upd.issues||job.issues)&&(upd.issues||job.issues)!=='None'?`<div style="margin-top:6px;font-size:12px;color:var(--yellow)">⚠️ ${upd.issues||job.issues}</div>`:''}
+    </div>` : isActive ? `
     <div class="divider"></div>
     <div class="form-group" style="margin-bottom:8px"><label>Assign Technician</label><select id="panel-tech-select"><option value="">Select...</option>${techs.map(t=>`<option value="${t.id}" ${tech?.id===t.id?'selected':''}>${t.name}</option>`).join('')}</select></div>
     <button class="btn btn-primary btn-full" style="margin-bottom:8px" onclick="doAssignFromPanel('${job.slot_id}','${job.id}')">✓ Assign Technician</button>
-    <button class="btn btn-warning btn-full" onclick="openRescheduleModal('${job.id}','${job.slot_id}')">🔄 Reschedule</button>`}
+    ${job.status !== 'ongoing' ? `<button class="btn btn-warning btn-full" onclick="openRescheduleModal('${job.id}','${job.slot_id}')">🔄 Reschedule</button>` : ''}` : ''}
     ${job.location_link ? `<a href="${job.location_link}" target="_blank" class="btn btn-secondary btn-sm btn-full" style="margin-top:8px">🗺 Open Map</a>` : ''}
-    ${job.reschedule_reason ? `<div class="reschedule-notice">⚠️ Rescheduled: ${job.reschedule_reason}</div>` : ''}`;
+    ${job.reschedule_reason ? `<div class="reschedule-notice" style="margin-top:8px">⚠️ Rescheduled: ${job.reschedule_reason}</div>` : ''}`;
 }
 
 async function doAssignFromPanel(slotId, jobId) {
@@ -1301,7 +1362,8 @@ async function doAssignFromPanel(slotId, jobId) {
 function filterSchedulerJobs(el, status) {
   if (!el) return;
   document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active')); el.classList.add('active');
-  const filtered = status === 'all' ? window.mockState.jobs : status === 'booked' ? window.mockState.jobs.filter(j=>j.status==='booked') : window.mockState.jobs.filter(j=>j.status===status);
+  const all = window.mockState.jobs;
+  const filtered = status === 'all' ? all : all.filter(j => j.status === status);
   const wrap = document.getElementById('sched-jobs-wrap'); if (wrap) wrap.innerHTML = renderSchedulerJobsTable(filtered);
 }
 
@@ -1405,7 +1467,55 @@ async function createSlot() {
   if (result) { closeModal('create-slot-modal'); showToast('Slot created!', 'success'); navigate('dashboard'); }
 }
 
-function renderSlotsPage() { return renderSchedulerDashboard(); }
+// Standalone slots page (from nav) — full slot management with date filter
+function renderSchedulerSlotsPage() {
+  const slots = window.mockState.slots;
+  const filterDate = window._schedFilterDate || today();
+  const daySlots = slots.filter(s => s.date === filterDate);
+  const jobs = window.mockState.jobs;
+  return `
+  <div class="stats-grid" id="sched-stats" style="margin-bottom:20px">
+    <div class="stat-card blue"><div class="stat-label">Total Slots</div><div class="stat-value">${daySlots.length}</div><div class="stat-meta">${filterDate===today()?'Today':filterDate}</div></div>
+    <div class="stat-card green"><div class="stat-label">Available</div><div class="stat-value">${daySlots.filter(s=>s.status==='available').length}</div><div class="stat-meta">Open</div></div>
+    <div class="stat-card yellow"><div class="stat-label">Booked</div><div class="stat-value">${daySlots.filter(s=>s.status==='booked'||s.status==='assigned').length}</div><div class="stat-meta">Scheduled</div></div>
+    <div class="stat-card green"><div class="stat-label">Ongoing</div><div class="stat-value">${jobs.filter(j=>j.status==='ongoing').length}</div><div class="stat-meta">Live now 🟢</div></div>
+  </div>
+  ${renderSlotsManagement()}`;
+}
+
+// Standalone jobs page for scheduler — full jobs list with all details
+function renderSchedulerJobsPage() {
+  const jobs = window.mockState.jobs;
+  const booked = jobs.filter(j=>j.status==='booked').length;
+  const assigned = jobs.filter(j=>j.status==='assigned').length;
+  const ongoing = jobs.filter(j=>j.status==='ongoing').length;
+  const completed = jobs.filter(j=>j.status==='completed').length;
+  return `
+  <div class="stats-grid" style="margin-bottom:20px">
+    <div class="stat-card yellow"><div class="stat-label">Booked</div><div class="stat-value">${booked}</div><div class="stat-meta">Awaiting tech</div></div>
+    <div class="stat-card orange"><div class="stat-label">Assigned</div><div class="stat-value">${assigned}</div><div class="stat-meta">Tech assigned</div></div>
+    <div class="stat-card green"><div class="stat-label">Ongoing</div><div class="stat-value">${ongoing}</div><div class="stat-meta">In progress 🟢</div></div>
+    <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value">${completed}</div><div class="stat-meta">All time</div></div>
+  </div>
+  <div class="scheduler-layout">
+    <div>
+      <div class="page-header"><div><h2>All Jobs</h2><p>Click any row to see full details & manage</p></div></div>
+      <div class="filters-bar">
+        <div class="filter-pill active" onclick="filterSchedulerJobs(this,'all')">All (${jobs.length})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'booked')">Booked (${booked})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'assigned')">Assigned (${assigned})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'ongoing')">🟢 Ongoing (${ongoing})</div>
+        <div class="filter-pill" onclick="filterSchedulerJobs(this,'completed')">Completed (${completed})</div>
+      </div>
+      <div id="sched-jobs-wrap">${renderSchedulerJobsTable(jobs)}</div>
+    </div>
+    <div class="detail-panel empty" id="job-detail-panel">
+      <div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◧</div><div>Click a job to see all details</div></div>
+    </div>
+  </div>`;
+}
+
+function renderSlotsPage() { return renderSchedulerSlotsPage(); }
 function tomorrow() { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().split('T')[0]; }
 
 // ============================================================
@@ -1416,49 +1526,57 @@ window.techWorkState = window.techWorkState || {};
 function renderTechnicianDashboard() {
   const user = window.currentUser, allJobs = window.mockState.jobs;
   let myJobs = user?.id?.startsWith('demo-')
-    ? allJobs.filter(j => j.status==='assigned' || j.status==='booked')
+    ? allJobs.filter(j => ['assigned','booked','ongoing'].includes(j.status))
     : allJobs.filter(j => { const slot = getSlot(j.slot_id); return slot?.technician_id === user?.id; });
-  const completedJobs = allJobs.filter(j => j.status === 'completed');
+  const myCompleted = myJobs.filter(j => j.status === 'completed');
   const pendingJobs = myJobs.filter(j => j.status !== 'completed');
+  const earnings = myCompleted.reduce((a,j)=>a+(j.final_amount||j.amount||0),0);
+  const greet = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening';
   return `
   <div class="tech-header">
-    <div><div style="font-size:18px;font-weight:700">Good morning 👋</div><div class="text-muted" style="font-size:13px;margin-top:4px">${pendingJobs.length} job${pendingJobs.length!==1?'s':''} assigned today</div></div>
+    <div><div style="font-size:18px;font-weight:700">${greet} 👋</div><div class="text-muted" style="font-size:13px;margin-top:4px">${pendingJobs.length} job${pendingJobs.length!==1?'s':''} pending today</div></div>
     <div style="text-align:right"><div class="stat-value" style="font-size:28px">${pendingJobs.length}</div><div class="text-xs text-muted">Pending</div></div>
   </div>
   <div class="stats-grid" style="margin-bottom:20px">
-    <div class="stat-card green"><div class="stat-label">Assigned</div><div class="stat-value">${myJobs.filter(j=>j.status==='assigned').length}</div><div class="stat-meta">Ready to go</div></div>
-    <div class="stat-card yellow"><div class="stat-label">Booked</div><div class="stat-value">${myJobs.filter(j=>j.status==='booked').length}</div><div class="stat-meta">Awaiting</div></div>
-    <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value">${completedJobs.length}</div><div class="stat-meta">All time</div></div>
-    <div class="stat-card blue"><div class="stat-label">Earnings</div><div class="stat-value" style="font-size:20px">₹${completedJobs.reduce((a,j)=>a+j.amount,0).toLocaleString()}</div><div class="stat-meta">Total collected</div></div>
+    <div class="stat-card orange"><div class="stat-label">Assigned</div><div class="stat-value">${myJobs.filter(j=>j.status==='assigned').length}</div><div class="stat-meta">Ready to go</div></div>
+    <div class="stat-card green"><div class="stat-label">Ongoing</div><div class="stat-value">${myJobs.filter(j=>j.status==='ongoing').length}</div><div class="stat-meta">🟢 In progress</div></div>
+    <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value">${myCompleted.length}</div><div class="stat-meta">All time</div></div>
+    <div class="stat-card green"><div class="stat-label">Earnings</div><div class="stat-value" style="font-size:18px">₹${earnings.toLocaleString()}</div><div class="stat-meta">Total collected</div></div>
   </div>
   <div class="section-title">Today's Jobs</div>
   <div class="tech-jobs-list" id="tech-jobs-list">
     ${pendingJobs.length ? pendingJobs.map(job => renderTechJobCard(job)).join('') : `<div class="empty-state"><div class="empty-state-icon">✅</div><p class="empty-state-text">All done for today!</p><p class="empty-state-sub">No pending jobs assigned</p></div>`}
   </div>
-  ${completedJobs.length ? `<div class="section-title" style="margin-top:24px">Completed Jobs</div><div class="tech-jobs-list">${completedJobs.slice(0,3).map(job => renderTechJobCard(job, true)).join('')}</div>` : ''}`;
+  ${myCompleted.length ? `<div class="section-title" style="margin-top:24px">Completed Jobs</div><div class="tech-jobs-list">${myCompleted.slice(0,5).map(job => renderTechJobCard(job, true)).join('')}</div>` : ''}`;
 }
 
 function renderTechJobCard(job, completed = false) {
   const svc = getService(job.service_id), slot = getSlot(job.slot_id), workState = window.techWorkState[job.id] || {};
-  return `<div class="tech-job-card" id="tech-card-${job.id}">
-    <div class="tech-job-header"><div><div class="tech-customer-name">${job.customer_name}</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px">${svc.icon} ${svc.name}</div></div><span class="status status-${job.status}">${job.status}</span></div>
+  // If job is ongoing but workState lost (page refresh), restore it
+  if (job.status === 'ongoing' && !workState.started) {
+    window.techWorkState[job.id] = { started: true, ended: false, startTime: job.site_in||'', startTimeVal: job.site_in||'' };
+  }
+  const ws = window.techWorkState[job.id] || {};
+  return `<div class="tech-job-card" id="tech-card-${job.id}" style="${job.status==='ongoing'?'border-color:rgba(34,197,94,0.4);':''}">
+    <div class="tech-job-header"><div><div class="tech-customer-name">${job.customer_name}</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px">${svc.icon} ${svc.name} · ${slot?.date||''}</div></div><span class="status status-${job.status}">${job.status}</span></div>
     <div class="tech-job-meta">
       <div class="tech-meta-item"><span class="tech-meta-label">Phone</span><span class="tech-meta-value">${job.phone}</span></div>
-      <div class="tech-meta-item"><span class="tech-meta-label">Time</span><span class="tech-meta-value mono">${slot ? formatTime(slot.time) : '—'}</span></div>
+      <div class="tech-meta-item"><span class="tech-meta-label">Slot Time</span><span class="tech-meta-value mono">${slot ? formatTime(slot.time) : '—'}</span></div>
       <div class="tech-meta-item"><span class="tech-meta-label">Place</span><span class="tech-meta-value">${job.place}</span></div>
-      <div class="tech-meta-item"><span class="tech-meta-label">Amount</span><span class="tech-meta-value mono" style="color:var(--green)">₹${job.amount.toLocaleString()}</span></div>
+      <div class="tech-meta-item"><span class="tech-meta-label">Quoted Amt</span><span class="tech-meta-value mono" style="color:var(--green)">₹${(job.amount||0).toLocaleString()}</span></div>
     </div>
-    <div style="font-size:13px;color:var(--text-secondary);background:var(--bg-elevated);border-radius:var(--radius-sm);padding:10px;margin-bottom:12px">${job.work_details}</div>
+    ${job.work_spec ? `<div style="font-size:12px;font-weight:600;color:var(--accent-light);margin-bottom:4px">🔧 ${job.work_spec}</div>` : ''}
+    <div style="font-size:13px;color:var(--text-secondary);background:var(--bg-elevated);border-radius:var(--radius-sm);padding:10px;margin-bottom:12px">${job.work_details||'—'}</div>
     ${!completed ? `
       <div class="tech-job-actions">
         <a href="tel:${job.phone}" class="btn btn-secondary btn-sm">📞 Call</a>
         ${job.location_link ? `<a href="${job.location_link}" target="_blank" class="btn btn-secondary btn-sm">🗺 Map</a>` : ''}
-        ${job.status !== 'completed' ? (!workState.started ? `<button class="btn btn-success" onclick="startWork('${job.id}')" style="flex:1">▶ Start Work</button>` : `<button class="btn btn-danger" onclick="endWork('${job.id}')" style="flex:1">■ End Work</button>`) : ''}
+        ${!ws.started ? `<button class="btn btn-success" onclick="startWork('${job.id}')" style="flex:1">▶ Start Work</button>` : !ws.ended ? `<button class="btn btn-danger" onclick="endWork('${job.id}')" style="flex:1">■ End Work</button>` : ''}
       </div>
-      ${workState.started && !workState.ended ? `<div style="margin-top:8px;padding:8px 12px;background:var(--green-dim);border:1px solid rgba(34,197,94,0.3);border-radius:var(--radius-sm);font-size:12px;color:var(--green)">● Work started at ${workState.startTime}</div>` : ''}
-      ${workState.ended ? renderWorkSubmitForm(job) : ''}
+      ${ws.started && !ws.ended ? `<div style="margin-top:8px;padding:8px 12px;background:var(--green-dim);border:1px solid rgba(34,197,94,0.3);border-radius:var(--radius-sm);font-size:12px;color:var(--green)">🟢 Work started${ws.startTime?' at '+ws.startTime:''} — visible to scheduler</div>` : ''}
+      ${ws.ended ? renderWorkSubmitForm(job) : ''}
     ` : `<div style="padding:8px 12px;background:var(--blue-dim);border:1px solid rgba(59,130,246,0.25);border-radius:var(--radius-sm);font-size:12px;color:var(--accent-light);display:flex;align-items:center;justify-content:space-between">
-      <span>✓ Completed · Balance collected: ₹${(( job.final_amount||job.amount||0)-(job.advance||0)).toLocaleString()}</span>
+      <span>✓ Completed · Balance: ₹${((job.final_amount||job.amount||0)-(job.advance||0)).toLocaleString()}</span>
       <button class="btn btn-sm btn-secondary" onclick="downloadWorkReportPDF('${job.id}')" style="font-size:11px;padding:4px 10px">📄 Report</button>
     </div>`}
   </div>`;
@@ -1479,9 +1597,13 @@ function renderWorkSubmitForm(job) {
   </div>`;
 }
 
-function startWork(jobId) {
+async function startWork(jobId) {
   const now = new Date();
   window.techWorkState[jobId] = { started: true, ended: false, startTime: now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}), startTimeVal: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` };
+  // Mark job as ongoing in Supabase so scheduler can see live status
+  await sb.from('jobs').update({ status: 'ongoing', site_in: window.techWorkState[jobId].startTimeVal }).eq('id', jobId);
+  const job = window.mockState.jobs.find(j => j.id === jobId);
+  if (job) { job.status = 'ongoing'; job.site_in = window.techWorkState[jobId].startTimeVal; }
   showToast('Work started! Clock is running.', 'success'); refreshTechCard(jobId);
 }
 
