@@ -504,6 +504,21 @@ tbody tr:hover { background: var(--bg-hover); }
 .tab.active { color: var(--accent-light); border-bottom-color: var(--accent); }
 .tab:hover:not(.active) { color: var(--text-secondary); }
 
+/* ===== IMAGE UPLOAD ===== */
+.img-upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.img-upload-box { border: 2px dashed var(--border-light); border-radius: var(--radius); padding: 16px; text-align: center; cursor: pointer; transition: var(--transition); position: relative; min-height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.img-upload-box:hover { border-color: var(--accent); background: var(--accent-dim); }
+.img-upload-box.has-image { border-style: solid; border-color: var(--green); background: var(--green-dim); padding: 4px; }
+.img-upload-box input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.img-upload-box img { width: 100%; height: 100px; object-fit: cover; border-radius: var(--radius-sm); display: block; }
+.img-upload-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.img-upload-icon { font-size: 22px; }
+.img-remove-btn { position: absolute; top: 4px; right: 4px; background: var(--red); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 2; }
+/* ===== PHOTO GALLERY (scheduler view) ===== */
+.photo-gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.photo-gallery img { width: 100%; border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition); }
+.photo-gallery img:hover { transform: scale(1.03); box-shadow: var(--shadow); }
+.photo-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-top: 4px; text-align: center; }
 /* ===== COMPLETION SUMMARY ===== */
 .completion-summary { background: var(--bg-elevated); border: 1px solid rgba(34,197,94,0.25); border-radius: var(--radius); padding: 16px; margin-top: 8px; }
 .completion-summary-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--green); margin-bottom: 10px; }
@@ -1344,6 +1359,14 @@ function renderCompletedSummary() {
         ${upd.work_done||job.work_done ? `<div style="margin-top:10px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Work Done</div><div style="color:var(--text-secondary)">${upd.work_done||job.work_done}</div></div>` : ''}
         ${(upd.issues||job.issues) && (upd.issues||job.issues)!=='None' ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Issues Found</div><div style="color:var(--yellow)">${upd.issues||job.issues}</div></div>` : ''}
         ${job.reschedule_reason ? `<div style="margin-top:6px;font-size:12px"><div class="summary-label" style="margin-bottom:3px">Reschedule Note</div><div style="color:var(--text-muted)">${job.reschedule_reason}</div></div>` : ''}
+        ${(job.photo_before || job.photo_after) ? `
+        <div style="margin-top:12px">
+          <div class="summary-label" style="margin-bottom:8px">📸 Site Photos</div>
+          <div class="photo-gallery">
+            ${job.photo_before ? `<div><img src="${job.photo_before}" onclick="openPhotoModal('${job.photo_before}','Before Work')" title="Click to enlarge" /><div class="photo-label">Before</div></div>` : ''}
+            ${job.photo_after ? `<div><img src="${job.photo_after}" onclick="openPhotoModal('${job.photo_after}','After Work')" title="Click to enlarge" /><div class="photo-label">After</div></div>` : ''}
+          </div>
+        </div>` : ''}
       </div>
     </div>`;
   }).join('')}
@@ -1429,6 +1452,7 @@ function showJobDetailPanel(jobId) {
       </div>
       ${upd.work_done||job.work_done ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">${upd.work_done||job.work_done}</div>` : ''}
       ${(upd.issues||job.issues)&&(upd.issues||job.issues)!=='None'?`<div style="margin-top:6px;font-size:12px;color:var(--yellow)">⚠️ ${upd.issues||job.issues}</div>`:''}
+      ${(job.photo_before||job.photo_after) ? `<div style="margin-top:10px"><div class="summary-label" style="margin-bottom:6px">📸 Photos</div><div class="photo-gallery">${job.photo_before?`<div><img src="${job.photo_before}" onclick="openPhotoModal('${job.photo_before}','Before')" style="cursor:pointer"/><div class="photo-label">Before</div></div>`:''} ${job.photo_after?`<div><img src="${job.photo_after}" onclick="openPhotoModal('${job.photo_after}','After')" style="cursor:pointer"/><div class="photo-label">After</div></div>`:''}</div></div>` : ''}
     </div>` : isActive ? `
     <div class="divider"></div>
     <div class="form-group" style="margin-bottom:8px"><label>Assign Technician</label><select id="panel-tech-select"><option value="">Select...</option>${techs.map(t=>`<option value="${t.id}" ${tech?.id===t.id?'selected':''}>${t.name}</option>`).join('')}</select></div>
@@ -1675,15 +1699,98 @@ function renderWorkSubmitForm(job) {
   const state = window.techWorkState[job.id] || {};
   return `<div class="tech-work-form" id="work-form-${job.id}">
     <div style="font-size:13px;font-weight:700;margin-bottom:4px">📝 Submit Work Report</div>
-    <div style="display:flex;gap:8px;font-size:12px;color:var(--text-muted);margin-bottom:8px"><span>Start: <strong>${state.startTime||'—'}</strong></span><span>•</span><span>End: <strong>${state.endTime||'—'}</strong></span></div>
+    <div style="display:flex;gap:8px;font-size:12px;color:var(--text-muted);margin-bottom:12px">
+      <span>Start: <strong>${state.startTime||'—'}</strong></span><span>•</span><span>End: <strong>${state.endTime||'—'}</strong></span>
+    </div>
     <div class="form-group"><label>Work Done *</label><textarea id="wd-${job.id}" placeholder="Describe what was done..." rows="3"></textarea></div>
     <div class="form-group"><label>Issues Found</label><textarea id="wi-${job.id}" placeholder="Any issues or follow-up needed..." rows="2"></textarea></div>
     <div class="form-row">
       <div class="form-group"><label>Final Amount (₹)</label><input type="number" id="wa-${job.id}" value="${job.amount}" /></div>
       <div class="form-group"><label>Payment Mode</label><select id="wp-${job.id}"><option value="cash">💵 Cash</option><option value="upi">📱 UPI</option><option value="card">💳 Card</option><option value="pending">⏳ Pending</option></select></div>
     </div>
+    <div class="form-group">
+      <label>📸 Before & After Photos</label>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Photos are embedded in the PDF report and uploaded for scheduler view. Max 2MB each.</div>
+      <div class="img-upload-grid">
+        <div>
+          <div class="img-upload-label" style="margin-bottom:6px">Before Work</div>
+          <div class="img-upload-box" id="before-box-${job.id}" onclick="triggerImgPick('before-${job.id}')">
+            <input type="file" id="before-${job.id}" accept="image/*" onchange="previewImage(this,'before-box-${job.id}')" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%" />
+            <div class="img-upload-icon">📷</div>
+            <div style="font-size:11px;color:var(--text-muted)">Tap to add</div>
+          </div>
+        </div>
+        <div>
+          <div class="img-upload-label" style="margin-bottom:6px">After Work</div>
+          <div class="img-upload-box" id="after-box-${job.id}" onclick="triggerImgPick('after-${job.id}')">
+            <input type="file" id="after-${job.id}" accept="image/*" onchange="previewImage(this,'after-box-${job.id}')" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%" />
+            <div class="img-upload-icon">✅</div>
+            <div style="font-size:11px;color:var(--text-muted)">Tap to add</div>
+          </div>
+        </div>
+      </div>
+    </div>
     <button class="btn btn-primary btn-full btn-lg" onclick="submitWork('${job.id}')">✓ Submit Work Report</button>
   </div>`;
+}
+
+function triggerImgPick(inputId) {
+  // Just let the native file input handle it — don't double-trigger
+}
+
+function previewImage(input, boxId) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { showToast('Image too large — max 2MB', 'error'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    box.classList.add('has-image');
+    box.innerHTML = `
+      <img src="${e.target.result}" alt="preview" />
+      <button class="img-remove-btn" onclick="removeImage(event,'${input.id}','${boxId}')">✕</button>`;
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeImage(e, inputId, boxId) {
+  e.stopPropagation();
+  const input = document.getElementById(inputId);
+  const box = document.getElementById(boxId);
+  if (input) input.value = '';
+  if (box) {
+    box.classList.remove('has-image');
+    const isAfter = inputId.startsWith('after');
+    box.innerHTML = `
+      <input type="file" id="${inputId}" accept="image/*" onchange="previewImage(this,'${boxId}')" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%" />
+      <div class="img-upload-icon">${isAfter ? '✅' : '📷'}</div>
+      <div style="font-size:11px;color:var(--text-muted)">Tap to add</div>`;
+  }
+}
+
+async function getImageBase64(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input?.files?.[0]) return null;
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(input.files[0]);
+  });
+}
+
+async function uploadImageToStorage(jobId, type, base64) {
+  // Upload to Supabase Storage — field-ops-photos bucket
+  if (!base64) return null;
+  try {
+    const blob = await fetch(base64).then(r => r.blob());
+    const filename = `${jobId}/${type}_${Date.now()}.jpg`;
+    const { data, error } = await sb.storage.from('field-ops-photos').upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+    if (error) { console.warn('Storage upload failed:', error.message); return null; }
+    const { data: urlData } = sb.storage.from('field-ops-photos').getPublicUrl(filename);
+    return urlData?.publicUrl || null;
+  } catch(e) { console.warn('Upload error:', e.message); return null; }
 }
 
 async function startWork(jobId) {
@@ -1716,20 +1823,47 @@ async function submitWork(jobId) {
   const finalAmount = parseFloat(document.getElementById(`wa-${jobId}`)?.value)||0;
   const paymentMode = document.getElementById(`wp-${jobId}`)?.value;
   const issues = document.getElementById(`wi-${jobId}`)?.value?.trim()||'None';
-  const updateData = { site_in: state.startTimeVal, site_out: state.endTimeVal, final_amount: finalAmount, payment_mode: paymentMode, work_done: workDone, issues };
-  // Save final_amount back to job too for easy access
-  await sb.from('jobs').update({ final_amount: finalAmount, payment_mode: paymentMode, site_in: state.startTimeVal, site_out: state.endTimeVal, work_done: workDone, issues }).eq('id', jobId);
+
+  // Get images as base64 for PDF embedding
+  const beforeBase64 = await getImageBase64(`before-${jobId}`);
+  const afterBase64 = await getImageBase64(`after-${jobId}`);
+
+  showToast('Submitting report...', 'info');
+
+  // Upload to Supabase Storage for scheduler view
+  let beforeUrl = null, afterUrl = null;
+  if (beforeBase64) beforeUrl = await uploadImageToStorage(jobId, 'before', beforeBase64);
+  if (afterBase64) afterUrl = await uploadImageToStorage(jobId, 'after', afterBase64);
+
+  const updateData = {
+    site_in: state.startTimeVal, site_out: state.endTimeVal,
+    final_amount: finalAmount, payment_mode: paymentMode,
+    work_done: workDone, issues,
+    photo_before: beforeUrl, photo_after: afterUrl
+  };
+
+  await sb.from('jobs').update({
+    final_amount: finalAmount, payment_mode: paymentMode,
+    site_in: state.startTimeVal, site_out: state.endTimeVal,
+    work_done: workDone, issues,
+    photo_before: beforeUrl, photo_after: afterUrl
+  }).eq('id', jobId);
+
   await completeJob(jobId, updateData);
+
   const job = window.mockState.jobs.find(j => j.id === jobId);
-  if (job) { job.final_amount = finalAmount; job.payment_mode = paymentMode; job.site_in = state.startTimeVal; job.site_out = state.endTimeVal; job.work_done = workDone; job.issues = issues; }
+  if (job) {
+    Object.assign(job, { final_amount: finalAmount, payment_mode: paymentMode, site_in: state.startTimeVal, site_out: state.endTimeVal, work_done: workDone, issues, photo_before: beforeUrl, photo_after: afterUrl });
+    // Store base64 locally for PDF (not uploaded to state)
+    job._beforeBase64 = beforeBase64;
+    job._afterBase64 = afterBase64;
+  }
+
   delete window.techWorkState[jobId];
-  showToast('Work report submitted! Job marked complete.', 'success');
+  showToast('Work report submitted!', 'success');
   setTimeout(() => {
     navigate('dashboard');
-    setTimeout(() => {
-      // Offer PDF download after dashboard loads
-      if (job) showPdfDownloadBanner(job, updateData);
-    }, 800);
+    setTimeout(() => { if (job) showPdfDownloadBanner(job, updateData); }, 800);
   }, 500);
 }
 
@@ -1744,7 +1878,7 @@ function showPdfDownloadBanner(job, upd) {
   setTimeout(() => banner.remove(), 15000);
 }
 
-function downloadWorkReportPDF(jobId) {
+async function downloadWorkReportPDF(jobId) {
   const job = window.mockState.jobs.find(j => j.id === jobId);
   if (!job) return;
   const svc = getService(job.service_id);
@@ -1754,12 +1888,37 @@ function downloadWorkReportPDF(jobId) {
   const advance = job.advance || 0;
   const balance = finalAmt - advance;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Work Report</title>
+  // Get images — use locally stored base64 first, fallback to storage URLs
+  const beforeImg = job._beforeBase64 || job.photo_before || null;
+  const afterImg = job._afterBase64 || job.photo_after || null;
+
+  // If we only have URLs (not base64), try to fetch and convert
+  async function urlToBase64(url) {
+    if (!url || url.startsWith('data:')) return url;
+    try {
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      return new Promise(res => { const r = new FileReader(); r.onload = e => res(e.target.result); r.readAsDataURL(blob); });
+    } catch { return url; }
+  }
+
+  const beforeSrc = beforeImg ? await urlToBase64(beforeImg) : null;
+  const afterSrc = afterImg ? await urlToBase64(afterImg) : null;
+
+  const photosSection = (beforeSrc || afterSrc) ? `
+  <div class="section">
+    <div class="section-title">Site Photos</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${beforeSrc ? `<div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Before Work</div><img src="${beforeSrc}" style="width:100%;border-radius:8px;border:1px solid #e2e8f0" /></div>` : '<div></div>'}
+      ${afterSrc ? `<div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">After Work</div><img src="${afterSrc}" style="width:100%;border-radius:8px;border:1px solid #e2e8f0" /></div>` : '<div></div>'}
+    </div>
+  </div>` : '';
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Work Report — ${job.customer_name}</title>
   <style>
     body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; color: #1a1a2e; font-size: 14px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 24px; }
     .logo { font-size: 22px; font-weight: 800; color: #3b82f6; letter-spacing: -0.5px; }
-    .report-title { font-size: 12px; color: #666; margin-top: 4px; }
     .badge { background: #dcfce7; color: #16a34a; border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
     .section { margin-bottom: 20px; }
     .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 6px; }
@@ -1771,27 +1930,25 @@ function downloadWorkReportPDF(jobId) {
     .amount-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
     .notes-box { background: #f8fafc; border-radius: 8px; padding: 14px; font-size: 13px; color: #444; line-height: 1.6; }
     .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
-    @media print { body { margin: 20px; } }
+    @media print { body { margin: 20px; } @page { margin: 15mm; } }
   </style></head><body>
   <div class="header">
-    <div><div class="logo">⚡ FieldOps</div><div class="report-title">Service Work Report</div><div style="font-size:12px;color:#888;margin-top:4px">Generated: ${new Date().toLocaleString('en-IN')}</div></div>
+    <div><div class="logo">⚡ FieldOps</div><div style="font-size:12px;color:#666;margin-top:4px">Service Work Report</div><div style="font-size:11px;color:#aaa;margin-top:2px">Generated: ${new Date().toLocaleString('en-IN')}</div></div>
     <span class="badge">✓ COMPLETED</span>
   </div>
-
   <div class="section">
     <div class="section-title">Customer Details</div>
     <div class="grid">
       <div class="field"><label>Customer Name</label><span>${job.customer_name}</span></div>
-      <div class="field"><label>Phone</label><span>${job.phone}${job.alt_phone ? ' / '+job.alt_phone : ''}</span></div>
+      <div class="field"><label>Phone</label><span>${job.phone}${job.alt_phone?' / '+job.alt_phone:''}</span></div>
       <div class="field"><label>Location</label><span>${job.place}</span></div>
       <div class="field"><label>Address</label><span>${job.address||'—'}</span></div>
     </div>
   </div>
-
   <div class="section">
     <div class="section-title">Service Details</div>
     <div class="grid">
-      <div class="field"><label>Service Type</label><span>${svc.name}</span></div>
+      <div class="field"><label>Service</label><span>${svc.name}</span></div>
       <div class="field"><label>Work Specification</label><span>${job.work_spec||'—'}</span></div>
       <div class="field"><label>Date</label><span>${slot?.date||'—'}</span></div>
       <div class="field"><label>Scheduled Time</label><span>${slot ? formatTime(slot.time) : '—'}</span></div>
@@ -1801,7 +1958,6 @@ function downloadWorkReportPDF(jobId) {
       <div class="field"><label>Payment Mode</label><span style="text-transform:capitalize">${job.payment_mode||'—'}</span></div>
     </div>
   </div>
-
   <div class="section">
     <div class="section-title">Amount Summary</div>
     <div class="amount-box">
@@ -1811,19 +1967,18 @@ function downloadWorkReportPDF(jobId) {
       <div class="amount-row" style="color:#16a34a"><span>Balance Collected On-Site</span><span>₹${balance.toLocaleString()}</span></div>
     </div>
   </div>
-
   <div class="section">
     <div class="section-title">Work Report</div>
     <div class="notes-box"><strong>Work Done:</strong><br>${job.work_done||'—'}</div>
     ${job.issues && job.issues !== 'None' ? `<div class="notes-box" style="margin-top:8px;border-left:3px solid #f59e0b"><strong>Issues Found:</strong><br>${job.issues}</div>` : ''}
     ${job.work_details ? `<div class="notes-box" style="margin-top:8px"><strong>Original Work Details:</strong><br>${job.work_details}</div>` : ''}
   </div>
-
+  ${photosSection}
   <div class="footer">
     <span>FieldOps — Service Operations Platform</span>
     <span>Job ID: ${job.id}</span>
   </div>
-  <script>window.onload = () => window.print();<\/script>
+  <script>window.onload = () => { setTimeout(() => window.print(), 300); }<\/script>
   </body></html>`;
 
   const blob = new Blob([html], { type: 'text/html' });
@@ -1834,7 +1989,7 @@ function downloadWorkReportPDF(jobId) {
   a.click();
   URL.revokeObjectURL(url);
   document.getElementById('pdf-banner')?.remove();
-  showToast('Work report downloaded! Open the file to print/save as PDF.', 'success');
+  showToast('Report downloaded! Open → Print → Save as PDF → Share on WhatsApp.', 'success');
 }
 
 // ============================================================
@@ -1872,6 +2027,20 @@ async function addUser() {
   if (!name || !email) { showToast('Name and email required', 'error'); return; }
   const result = await addUserDB({ name, email, phone: phone||'—', role });
   if (result) { closeModal('add-user-modal'); showToast(`${name} added as ${role}!`, 'success'); navigate('users'); }
+}
+
+function openPhotoModal(src, label) {
+  const existing = document.getElementById('photo-modal');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'photo-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;cursor:pointer;';
+  overlay.innerHTML = `
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#aaa;margin-bottom:12px">${label}</div>
+    <img src="${src}" style="max-width:90vw;max-height:80vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.8)" />
+    <div style="margin-top:16px;font-size:12px;color:#666">Tap anywhere to close</div>`;
+  overlay.onclick = () => overlay.remove();
+  document.body.appendChild(overlay);
 }
 
 // ============================================================
