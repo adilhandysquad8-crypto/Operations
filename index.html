@@ -383,6 +383,38 @@ tbody tr:hover { background: var(--bg-hover); }
 .modal-form { display: flex; flex-direction: column; gap: 14px; }
 .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
 
+/* ===== SLOT AVAILABILITY VISUAL (SALES) ===== */
+.slot-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; }
+.slot-tile { border-radius: var(--radius); padding: 12px 14px; cursor: pointer; transition: var(--transition); border: 2px solid transparent; position: relative; text-align: center; }
+.slot-tile.available { background: var(--green-dim); border-color: rgba(34,197,94,0.3); }
+.slot-tile.available:hover { border-color: var(--green); box-shadow: 0 0 16px rgba(34,197,94,0.2); transform: translateY(-2px); }
+.slot-tile.available.selected { border-color: var(--green); background: rgba(34,197,94,0.2); box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
+.slot-tile.booked { background: var(--yellow-dim); border-color: rgba(234,179,8,0.2); cursor: not-allowed; opacity: 0.6; }
+.slot-tile.blocked { background: var(--red-dim); border-color: rgba(239,68,68,0.2); cursor: not-allowed; opacity: 0.5; }
+.slot-tile.ongoing { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); cursor: not-allowed; opacity: 0.7; }
+.slot-tile-time { font-family: var(--font-mono); font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.slot-tile-status { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+.slot-tile.available .slot-tile-status { color: var(--green); }
+.slot-tile.booked .slot-tile-status { color: var(--yellow); }
+.slot-tile.blocked .slot-tile-status, .slot-tile.ongoing .slot-tile-status { color: var(--text-muted); }
+.slot-tile-check { position: absolute; top: 6px; right: 8px; font-size: 14px; opacity: 0; transition: opacity 0.15s; }
+.slot-tile.selected .slot-tile-check { opacity: 1; }
+.slot-legend { display: flex; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.slot-legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.slot-legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+/* ===== PUSH NOTIFICATION BELL ===== */
+.notif-btn { position: relative; background: var(--bg-elevated); border: 1px solid var(--border-light); color: var(--text-secondary); width: 36px; height: 36px; border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: var(--transition); }
+.notif-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.notif-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); border: 2px solid var(--bg-surface); display: none; }
+.notif-dot.show { display: block; }
+.notif-panel { position: fixed; top: 70px; right: 16px; width: 320px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 500; max-height: 420px; overflow-y: auto; animation: slideUp 0.2s ease; }
+.notif-header { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.notif-item { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.notif-item:last-child { border-bottom: none; }
+.notif-item.unread { background: var(--accent-dim); }
+.notif-item-title { font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+.notif-item-body { color: var(--text-secondary); font-size: 12px; }
+.notif-item-time { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 /* ===== SALES PAGE ===== */
 .sales-layout { display: grid; grid-template-columns: 1fr 380px; gap: 20px; align-items: start; }
 .job-form-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; position: sticky; top: 84px; }
@@ -599,6 +631,9 @@ tbody tr:hover { background: var(--bg-hover); }
       <div class="navbar-right">
         <span class="navbar-user" id="navbar-user">—</span>
         <span class="role-badge" id="navbar-role">sales</span>
+        <button class="notif-btn" id="notif-bell" onclick="toggleNotifPanel()" title="Notifications">
+          🔔<span class="notif-dot" id="notif-dot"></span>
+        </button>
         <button class="btn btn-ghost btn-sm" onclick="handleLogout()">Logout</button>
       </div>
     </header>
@@ -674,6 +709,7 @@ async function loadUserAndInit(authUser) {
 }
 
 async function handleLogout() {
+  stopRealtimeSubscription();
   initSb();
   await sb.auth.signOut().catch(() => {});
   window.currentUser = null;
@@ -882,6 +918,8 @@ async function initApp(user) {
   filterNavForRole(user.role);
   document.getElementById('main-content').innerHTML = '<div class="loading-state"><div class="loading-spinner"></div> Loading data...</div>';
   await loadAppData();
+  requestNotificationPermission();
+  startRealtimeSubscription();
   navigate('dashboard');
 }
 
@@ -1007,18 +1045,19 @@ function renderSalesDashboard() {
   const jobs = window.mockState.jobs;
   const stats = [
     { label: 'Total Jobs', value: jobs.length, color: 'blue', meta: 'All time' },
-    { label: 'Booked Today', value: jobs.filter(j => j.status === 'booked').length, color: 'yellow', meta: 'Pending assignment' },
+    { label: 'Booked', value: jobs.filter(j => j.status === 'booked').length, color: 'yellow', meta: 'Pending assign' },
     { label: 'Assigned', value: jobs.filter(j => j.status === 'assigned').length, color: 'green', meta: 'In progress' },
-    { label: 'Completed', value: jobs.filter(j => j.status === 'completed').length, color: 'blue', meta: 'This month' },
+    { label: 'Completed', value: jobs.filter(j => j.status === 'completed').length, color: 'blue', meta: 'Done' },
   ];
   return `${renderStatsGrid(stats)}
   <div class="sales-layout">
     <div>
-      <div class="page-header"><div><h2>Recent Jobs</h2><p>Jobs you've booked</p></div><button class="btn btn-primary btn-sm" onclick="scrollToForm()">+ New Job</button></div>
+      <div class="page-header"><div><h2>Recent Jobs</h2><p>Your bookings</p></div><button class="btn btn-primary btn-sm" onclick="scrollToForm()">+ New Job</button></div>
       <div class="filters-bar">
         <div class="filter-pill active" onclick="filterJobs(this,'all')">All</div>
         <div class="filter-pill" onclick="filterJobs(this,'booked')">Booked</div>
         <div class="filter-pill" onclick="filterJobs(this,'assigned')">Assigned</div>
+        <div class="filter-pill" onclick="filterJobs(this,'ongoing')">🟢 Ongoing</div>
         <div class="filter-pill" onclick="filterJobs(this,'completed')">Completed</div>
         <div class="search-box"><span style="color:var(--text-muted)">🔍</span><input type="text" placeholder="Search customer..." oninput="searchJobs(this.value)" /></div>
       </div>
@@ -1037,9 +1076,16 @@ function renderSalesDashboard() {
             <div class="form-group"><label>Place *</label><input type="text" id="f-place" placeholder="Area / Locality" /></div>
             <div class="form-group"><label>Service *</label><select id="f-service" onchange="loadAvailableSlots()"><option value="">Select service</option>${window.mockState.services.map(s=>`<option value="${s.id}">${s.icon} ${s.name}</option>`).join('')}</select></div>
           </div>
+          <div class="form-row">
+            <div class="form-group"><label>Date *</label><input type="date" id="f-date" value="${today()}" onchange="loadAvailableSlots()" /></div>
+          </div>
           <div class="form-group"><label>Address</label><input type="text" id="f-address" placeholder="Full address" /></div>
           <div class="form-group"><label>Location Link</label><input type="url" id="f-location" placeholder="https://maps.google.com/..." /></div>
-          <div class="form-group"><label>Available Slot *</label><select id="f-slot"><option value="">Select service first</option></select></div>
+          <div class="form-group">
+            <label>Available Slot *</label>
+            <input type="hidden" id="f-slot" />
+            <div id="f-slot-picker"><div style="font-size:12px;color:var(--text-muted);padding:10px 0">Select a service and date above</div></div>
+          </div>
           <div class="form-group"><label>Work Specification</label><input type="text" id="f-workspec" placeholder="e.g. AC Servicing, Pipe repair..." /></div>
           <div class="form-group"><label>Work Details</label><textarea id="f-workdetails" placeholder="Describe the issue in detail..."></textarea></div>
           <div class="form-row">
@@ -1058,13 +1104,51 @@ function renderSalesDashboard() {
 
 function loadAvailableSlots() {
   const serviceId = document.getElementById('f-service')?.value;
-  const slotEl = document.getElementById('f-slot');
-  if (!slotEl) return;
-  if (!serviceId) { slotEl.innerHTML = '<option value="">Select service first</option>'; return; }
-  const availSlots = window.mockState.slots.filter(s => s.service_id === serviceId && s.status === 'available');
-  slotEl.innerHTML = availSlots.length
-    ? '<option value="">Choose a time slot</option>' + availSlots.map(s => `<option value="${s.id}">${formatTime(s.time)} — ${s.date}</option>`).join('')
-    : '<option value="">No slots available</option>';
+  const date = document.getElementById('f-date')?.value || today();
+  const picker = document.getElementById('f-slot-picker');
+  const hiddenInput = document.getElementById('f-slot');
+  if (!picker) return;
+  if (!serviceId) {
+    picker.innerHTML = `<div style="font-size:12px;color:var(--text-muted);padding:10px 0">Select a service and date to see slots</div>`;
+    return;
+  }
+  const allSlots = window.mockState.slots.filter(s => s.service_id === serviceId && s.date === date);
+  if (!allSlots.length) {
+    picker.innerHTML = `<div style="font-size:12px;color:var(--red);padding:10px 0;background:var(--red-dim);border-radius:var(--radius-sm);padding:10px 12px;">⚠️ No slots available for this date. Contact scheduler to create slots.</div>`;
+    return;
+  }
+  const availCount = allSlots.filter(s => s.status === 'available' && !window.mockState.jobs.find(j => j.slot_id === s.id)).length;
+  picker.innerHTML = `
+    <div class="slot-legend">
+      <div class="slot-legend-item"><div class="slot-legend-dot" style="background:var(--green)"></div>Available (${availCount})</div>
+      <div class="slot-legend-item"><div class="slot-legend-dot" style="background:var(--yellow)"></div>Booked</div>
+      <div class="slot-legend-item"><div class="slot-legend-dot" style="background:var(--red)"></div>Blocked</div>
+    </div>
+    <div class="slot-picker-grid">
+      ${allSlots.map(s => {
+        const jobOnSlot = window.mockState.jobs.find(j => j.slot_id === s.id);
+        const displayStatus = jobOnSlot ? jobOnSlot.status : s.status;
+        const isAvail = s.status === 'available' && !jobOnSlot;
+        return `<div class="slot-tile ${isAvail ? 'available' : displayStatus}"
+          id="stile-${s.id}"
+          onclick="${isAvail ? `selectSlotTile('${s.id}')` : ''}"
+          title="${isAvail ? 'Click to select' : (jobOnSlot ? 'Booked: '+jobOnSlot.customer_name : displayStatus)}">
+          <div class="slot-tile-time">${formatTime(s.time)}</div>
+          <div class="slot-tile-status">${isAvail ? '✓ Available' : displayStatus === 'ongoing' ? '🟢 Ongoing' : displayStatus === 'completed' ? '✅ Done' : displayStatus}</div>
+          ${!isAvail && jobOnSlot ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">${jobOnSlot.customer_name}</div>` : ''}
+          <div class="slot-tile-check">✓</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  if (hiddenInput) hiddenInput.value = '';
+}
+
+function selectSlotTile(slotId) {
+  document.querySelectorAll('.slot-tile.selected').forEach(t => t.classList.remove('selected'));
+  const tile = document.getElementById(`stile-${slotId}`);
+  if (tile) tile.classList.add('selected');
+  const hiddenInput = document.getElementById('f-slot');
+  if (hiddenInput) hiddenInput.value = slotId;
 }
 
 async function bookJob() {
@@ -1083,9 +1167,14 @@ async function bookJob() {
 
 function resetForm() {
   ['f-name','f-phone','f-altphone','f-place','f-address','f-location','f-workspec','f-workdetails','f-amount','f-advance'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  const svcEl = document.getElementById('f-service'); const slotEl = document.getElementById('f-slot');
+  const svcEl = document.getElementById('f-service');
+  const dateEl = document.getElementById('f-date');
+  const slotEl = document.getElementById('f-slot');
+  const picker = document.getElementById('f-slot-picker');
   if (svcEl) svcEl.value = '';
-  if (slotEl) slotEl.innerHTML = '<option value="">Select service first</option>';
+  if (dateEl) dateEl.value = today();
+  if (slotEl) slotEl.value = '';
+  if (picker) picker.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:10px 0">Select a service and date above</div>';
 }
 function scrollToForm() { document.getElementById('job-form')?.scrollIntoView({ behavior: 'smooth' }); }
 function filterJobs(el, status) {
@@ -1783,6 +1872,131 @@ async function addUser() {
   if (!name || !email) { showToast('Name and email required', 'error'); return; }
   const result = await addUserDB({ name, email, phone: phone||'—', role });
   if (result) { closeModal('add-user-modal'); showToast(`${name} added as ${role}!`, 'success'); navigate('users'); }
+}
+
+// ============================================================
+// NOTIFICATION SYSTEM (Supabase Realtime + Web Push)
+// ============================================================
+window._notifications = [];
+window._realtimeChannel = null;
+
+function toggleNotifPanel() {
+  const existing = document.getElementById('notif-panel');
+  if (existing) { existing.remove(); return; }
+  markNotificationsRead();
+  const panel = document.createElement('div');
+  panel.id = 'notif-panel';
+  panel.className = 'notif-panel';
+  const notifs = window._notifications;
+  panel.innerHTML = `
+    <div class="notif-header">
+      <span style="font-size:14px;font-weight:700">🔔 Notifications</span>
+      <button onclick="document.getElementById('notif-panel').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    ${notifs.length === 0 ? '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">No notifications yet</div>' :
+      notifs.slice(0,20).map(n => `
+        <div class="notif-item ${n.read?'':'unread'}">
+          <div class="notif-item-title">${n.title}</div>
+          <div class="notif-item-body">${n.body}</div>
+          <div class="notif-item-time">${n.time}</div>
+        </div>`).join('')}`;
+  document.body.appendChild(panel);
+  document.addEventListener('click', function closePanel(e) {
+    if (!panel.contains(e.target) && e.target.id !== 'notif-bell') {
+      panel.remove();
+      document.removeEventListener('click', closePanel);
+    }
+  }, { capture: true });
+}
+
+function addNotification(title, body) {
+  const notif = { title, body, time: new Date().toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}), read: false };
+  window._notifications.unshift(notif);
+  // Show dot
+  const dot = document.getElementById('notif-dot');
+  if (dot) dot.classList.add('show');
+  // Show toast
+  showToast(`${title}: ${body}`, 'info');
+  // Browser notification if permitted
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body, icon: '/favicon.ico' });
+  }
+}
+
+function markNotificationsRead() {
+  window._notifications.forEach(n => n.read = true);
+  const dot = document.getElementById('notif-dot');
+  if (dot) dot.classList.remove('show');
+}
+
+async function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    const perm = await Notification.requestPermission();
+    if (perm === 'granted') showToast('Notifications enabled!', 'success');
+  }
+}
+
+function startRealtimeSubscription() {
+  if (!sb || window._realtimeChannel) return;
+  const role = window.currentUser?.role;
+  const userId = window.currentUser?.id;
+
+  // Subscribe to jobs table changes
+  window._realtimeChannel = sb
+    .channel('fieldops-live')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'jobs' }, payload => {
+      const job = payload.new;
+      const old = payload.old;
+
+      // Update local state
+      const idx = window.mockState.jobs.findIndex(j => j.id === job.id);
+      if (idx >= 0) window.mockState.jobs[idx] = { ...window.mockState.jobs[idx], ...job };
+      else window.mockState.jobs.unshift(job);
+
+      // Notify scheduler when tech goes ongoing (site in)
+      if (role === 'scheduler' && job.status === 'ongoing' && old.status !== 'ongoing') {
+        const slot = getSlot(job.slot_id);
+        const tech = slot ? getUser(slot.technician_id) : null;
+        addNotification('🟢 Technician On Site', `${tech?.name||'Technician'} started work for ${job.customer_name}`);
+      }
+      // Notify scheduler when job completed (site out)
+      if (role === 'scheduler' && job.status === 'completed' && old.status !== 'completed') {
+        const slot = getSlot(job.slot_id);
+        const tech = slot ? getUser(slot.technician_id) : null;
+        addNotification('✅ Job Completed', `${tech?.name||'Technician'} completed ${job.customer_name} — ₹${(job.final_amount||job.amount||0).toLocaleString()}`);
+      }
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'jobs' }, payload => {
+      const job = payload.new;
+      // Notify scheduler of new booking
+      if (role === 'scheduler') {
+        addNotification('📋 New Job Booked', `${job.customer_name} · ${job.place}`);
+      }
+      if (!window.mockState.jobs.find(j => j.id === job.id)) {
+        window.mockState.jobs.unshift(job);
+      }
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'slots' }, payload => {
+      const slot = payload.new;
+      const old = payload.old;
+      // Notify technician when assigned to a slot
+      if (role === 'technician' && slot.technician_id === userId && old.technician_id !== userId) {
+        const job = window.mockState.jobs.find(j => j.slot_id === slot.id);
+        const svc = getService(slot.service_id);
+        addNotification('🔧 Job Assigned to You', `${svc.name} at ${formatTime(slot.time)} on ${slot.date}${job?' — '+job.customer_name:''}`);
+      }
+      // Update local slot
+      const idx = window.mockState.slots.findIndex(s => s.id === slot.id);
+      if (idx >= 0) window.mockState.slots[idx] = { ...window.mockState.slots[idx], ...slot };
+    })
+    .subscribe();
+}
+
+function stopRealtimeSubscription() {
+  if (window._realtimeChannel) {
+    sb.removeChannel(window._realtimeChannel);
+    window._realtimeChannel = null;
+  }
 }
 
 // ============================================================
